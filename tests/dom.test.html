@@ -363,6 +363,58 @@ frame.addEventListener('load', async function run() {
     eq(cards().length, total, 'all back');
   });
 
+  await test('flagging a card lights its star, logs nothing, and survives a reload', async () => {
+    await reset();
+    W.addTask({ title: 'Flag me', columnId: W.__board.state.columns[0].id });
+    await sleep(40);
+    const events = W.__board.state.events.length;
+    const card = () => cards().find(c => c.querySelector('h3').textContent === 'Flag me');
+    card().querySelector('.flag').click();
+    await sleep(40);
+    eq(W.__board.state.tasks.find(t => t.title === 'Flag me').flag, true, 'state flagged');
+    eq(card().querySelector('.flag').getAttribute('aria-pressed'), 'true', 'star lit');
+    eq(W.__board.state.events.length, events, 'flagging is planning, not history');
+    await sleep(200); // save is debounced
+    await reload();
+    eq(W.__board.state.tasks.find(t => t.title === 'Flag me').flag, true, 'still flagged');
+  });
+
+  await test('the ★ chip sits beside All and owns the row like a category', async () => {
+    W.addTask({ title: 'Plain card', columnId: W.__board.state.columns[1].id });
+    W.__board.state.projects.push({ id: 'zz', name: 'zeta', color: '#8FB8FF' });
+    W.render();
+    await sleep(40);
+    const chip = () => D.querySelector('.flagpill');
+    const pills = () => [...D.querySelectorAll('#filters .pill')];
+    eq(D.getElementById('filters').children[1], chip(), 'pinned right after All');
+    eq(chip().textContent.trim(), '1', 'counts flagged cards');
+
+    chip().click();
+    await sleep(40);
+    eq(cards().length, 1, 'only the flagged card shows');
+    eq(chip().getAttribute('aria-pressed'), 'true', 'chip pressed');
+    eq(pills()[0].getAttribute('aria-pressed'), 'false', 'All released — ★ is a category, not a modifier');
+
+    pills().find(p => p.textContent.includes('zeta')).click();
+    await sleep(40);
+    assert(!W.__board.state.flagFilter, 'a project releases ★');
+    eq(W.__board.state.filter, 'zz', 'the project holds the row');
+
+    chip().click();
+    await sleep(40);
+    eq(W.__board.state.filter, null, '★ releases the project');
+    pills()[0].click(); // All
+    await sleep(40);
+    eq(cards().length, 3, 'all back — the demo card counts too');
+
+    // F on a focused card unflags it; the chip folds away with the last star
+    const card = cards().find(c => c.querySelector('h3').textContent === 'Flag me');
+    card.dispatchEvent(new W.KeyboardEvent('keydown', { key: 'f', bubbles: true }));
+    await sleep(40);
+    assert(!W.__board.state.tasks.find(t => t.title === 'Flag me').flag, 'unflagged from the keyboard');
+    assert(!chip(), 'chip gone with the last flag');
+  });
+
   await test('the theme toggles and is remembered', async () => {
     const first = D.documentElement.dataset.theme;
     W.toggleTheme();

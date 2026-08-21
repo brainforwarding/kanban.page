@@ -459,6 +459,20 @@ test('a board that already has a log is never regenerated from createdAt', () =>
   assert.equal(s.events[0].title, 'real history');
 });
 
+test('flags ride through migration, and the flag filter defaults to off', () => {
+  const s = C.migrate({
+    v: 2,
+    columns: [{ id: 'c1', name: 'Inbox' }],
+    tasks: [{ id: 't1', title: 'A', columnId: 'c1', order: 0, flag: true }],
+    events: [],
+    flagFilter: true,
+  });
+  assert.equal(s.tasks[0].flag, true);
+  assert.equal(s.flagFilter, true);
+  assert.equal(C.defaultBoard().flagFilter, false);
+  assert.equal(C.migrate({ v: 2, columns: [{ id: 'c1', name: 'Inbox' }], tasks: [], events: [] }).flagFilter, false);
+});
+
 test('tasks pointing at a stage that no longer exists are rehomed, not lost', () => {
   const s = C.migrate({
     v: 2,

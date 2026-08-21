@@ -301,6 +301,7 @@ const BoardCore = (() => {
       tasks: [],
       events: [],
       filter: null,
+      flagFilter: false,
     };
   }
 
@@ -334,6 +335,7 @@ const BoardCore = (() => {
         theme: raw.theme || 'light',
         asOf: null,
         filter: raw.filter || null,
+        flagFilter: !!raw.flagFilter,
       };
     }
 
@@ -365,6 +367,7 @@ const BoardCore = (() => {
       projects: raw.projects || [],
       events,
       filter: raw.filter || null,
+      flagFilter: !!raw.flagFilter,
     };
   }
 

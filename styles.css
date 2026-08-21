@@ -193,6 +193,11 @@ kbd {
 .pill.add { color: var(--faint); padding: 0 9px; }
 .pill.add:hover { color: var(--accent); }
 
+/* the ★ filter chip — the star is always lit so the chip reads as "n flagged"
+   at a glance; pressed state borrows the standard pill treatment */
+.pill.flagpill { gap: 6px; padding: 0 10px; }
+.pill.flagpill svg { width: 12.5px; height: 12.5px; color: var(--accent-fill); flex: none; }
+
 .tools {
   display: flex;
   align-items: center;
@@ -377,11 +382,36 @@ kbd {
 
 .card h3 {
   margin: 0;
+  padding-right: 18px; /* the flag's corner — titles never run under the star */
   font: 500 14px/1.38 var(--ui);
   letter-spacing: -.005em;
   color: var(--text);
   word-break: break-word;
 }
+
+/* The flag lives in the top-right corner: invisible at rest, a faint outline
+   under the pointer, a filled amber star once set — the one legitimate second
+   use of the accent, since amber is what a flag means. */
+.card .flag {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity .16s, color .16s, background .16s, transform .16s var(--ease);
+}
+.card:hover .flag,
+.card .flag:focus-visible,
+.card .flag[aria-pressed="true"] { opacity: 1; }
+.card .flag:hover { color: var(--accent); background: var(--raise); }
+.card .flag:active { transform: scale(.88); }
+.card .flag[aria-pressed="true"] { color: var(--accent-fill); }
+.card .flag svg { width: 14px; height: 14px; }
 
 .card .note {
   margin: 5px 0 0;
@@ -700,7 +730,7 @@ kbd {
 }
 .flagbtn:hover { background: var(--raise); color: var(--text); }
 .flagbtn:active { transform: scale(.9); }
-.flagbtn[aria-pressed="true"] { color: var(--accent); }
+.flagbtn[aria-pressed="true"] { color: var(--accent-fill); }
 .flagbtn svg { width: 15px; height: 15px; }
 
 /* ── projects panel ────────────────────────────────────── */

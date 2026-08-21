@@ -20,6 +20,8 @@ const ICON = {
   left:  '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9.6 4L5.6 8l4 4"/></svg>',
   right: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 4l4 4-4 4"/></svg>',
   grip:  '<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="6" cy="4.2" r="1.1"/><circle cx="10" cy="4.2" r="1.1"/><circle cx="6" cy="8" r="1.1"/><circle cx="10" cy="8" r="1.1"/><circle cx="6" cy="11.8" r="1.1"/><circle cx="10" cy="11.8" r="1.1"/></svg>',
+  star:  '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 2.5L9.47 6.28 13.52 6.51 10.38 9.07 11.41 12.99 8 10.8 4.59 12.99 5.62 9.07 2.48 6.51 6.53 6.28Z"/></svg>',
+  starFill: '<svg viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M8 2.5L9.47 6.28 13.52 6.51 10.38 9.07 11.41 12.99 8 10.8 4.59 12.99 5.62 9.07 2.48 6.51 6.53 6.28Z"/></svg>',
 };
 
 const COLORS = ['#FFB454', '#7FD1AE', '#8FB8FF', '#F58FA8', '#C79BFF', '#6FD3E8', '#D6C36B', '#9AA5B8'];
@@ -174,6 +176,7 @@ const archivedTasks = () => state.tasks.filter(t => t.archivedAt);
 
 function visible(t) {
   if (state.filter && t.projectId !== state.filter) return false;
+  if (state.flagFilter && !t.flag) return false;
   if (!query) return true;
   const p = projectOf(t);
   return [t.title, t.notes, t.session, p && p.name]
@@ -197,10 +200,26 @@ function renderFilters() {
   filtersEl.innerHTML = '';
   const all = document.createElement('button');
   all.className = 'pill';
-  all.setAttribute('aria-pressed', String(!state.filter));
+  all.setAttribute('aria-pressed', String(!state.filter && !state.flagFilter));
   all.textContent = 'All'; // no dot: the dot means "a project", and All is not one
-  all.onclick = () => { state.filter = null; save(); render(); };
+  all.onclick = () => { state.filter = null; state.flagFilter = false; save(); render(); };
   filtersEl.append(all);
+
+  // The ★ chip is pinned beside All so a long project list can never scroll
+  // it out of reach — but no standing chrome: it only exists while something
+  // is flagged (or the filter is on, so it can be turned off). It is a
+  // category of its own, not a modifier: the row holds one selection, so
+  // pressing ★ releases All or the active project, and they release ★.
+  const flagged = state.tasks.filter(t => t.flag && onBoard(t)).length;
+  if (flagged || state.flagFilter) {
+    const fp = document.createElement('button');
+    fp.className = 'pill flagpill';
+    fp.title = 'Flagged';
+    fp.setAttribute('aria-pressed', String(!!state.flagFilter));
+    fp.innerHTML = `${ICON.starFill}<span style="color:var(--faint);font:400 10.5px var(--mono)">${flagged}</span>`;
+    fp.onclick = () => { state.flagFilter = !state.flagFilter; if (state.flagFilter) state.filter = null; save(); render(); };
+    filtersEl.append(fp);
+  }
 
   state.projects.forEach(p => {
     const n = state.tasks.filter(t => t.projectId === p.id && onBoard(t)).length;
@@ -209,7 +228,7 @@ function renderFilters() {
     b.style.setProperty('--c', p.color);
     b.setAttribute('aria-pressed', String(state.filter === p.id));
     b.innerHTML = `<span class="dot"></span>${esc(p.name)}${n ? ` <span style="color:var(--faint);font:400 10.5px var(--mono)">${n}</span>` : ''}`;
-    b.onclick = () => { state.filter = state.filter === p.id ? null : p.id; save(); render(); };
+    b.onclick = () => { state.filter = state.filter === p.id ? null : p.id; state.flagFilter = false; save(); render(); };
     filtersEl.append(b);
   });
 
@@ -297,6 +316,7 @@ function cardEl(t) {
 
   el.innerHTML = `
     <span class="edge"></span>
+    <button class="flag" title="${t.flag ? 'Unflag' : 'Flag  F'}" aria-pressed="${t.flag ? 'true' : 'false'}">${t.flag ? ICON.starFill : ICON.star}</button>
     <h3>${esc(t.title)}</h3>
     ${t.notes ? `<p class="note">${esc(t.notes)}</p>` : ''}
     ${p || since ? `<div class="meta">
@@ -312,9 +332,12 @@ function cardEl(t) {
 
   const chip = $('.chip', el);
   if (chip) chip.onclick = e => { e.stopPropagation(); copyChip(chip, t.session); };
+  $('.flag', el).onclick = e => { e.stopPropagation(); toggleFlag(t.id); };
 
   el.addEventListener('keydown', e => {
+    if (e.target !== el) return; // buttons inside the card keep their own keys
     if (e.key === 'Enter') { e.preventDefault(); openEditor(t.id); }
+    if (e.key === 'f') { e.preventDefault(); toggleFlag(t.id); }
     if (e.altKey && e.key.startsWith('Arrow')) { e.preventDefault(); nudge(t.id, e.key); }
     if (e.key === 'c' && chip) { e.preventDefault(); copyChip(chip, t.session); }
   });
@@ -374,7 +397,7 @@ function addTask(patch) {
   const now = Date.now();
   const t = {
     id: uid(), title: '', notes: '', projectId: state.filter || null,
-    session: '', flag: false, columnId: state.columns[0].id,
+    session: '', flag: state.flagFilter || false, columnId: state.columns[0].id,
     order: 0, createdAt: now, updatedAt: now, ...patch,
   };
   state.tasks.filter(x => x.columnId === t.columnId).forEach(x => x.order += 1);
@@ -433,6 +456,18 @@ function nudge(id, key) {
 
 const resequence = colId => C.reindex(state.tasks, colId);
 
+/** Flagging is planning, not work: no event is logged and the age stamp does
+    not reset, so the report and "untouched for" never see it. */
+function toggleFlag(id) {
+  const t = byId(id);
+  if (!t) return;
+  t.flag = !t.flag;
+  save();
+  render();
+  const el = board.querySelector(`.card[data-id="${id}"]`);
+  if (el) el.focus();
+}
+
 /* ── copy ──────────────────────────────────────────────── */
 
 async function copyText(text) {
@@ -481,7 +516,7 @@ let lastPointer = { x: 0, y: 0 };
 board.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
   const card = e.target.closest('.card');
-  if (!card || e.target.closest('.chip')) return;
+  if (!card || e.target.closest('.chip') || e.target.closest('.flag')) return;
 
   const sx = e.clientX, sy = e.clientY;
   let started = false;
@@ -704,6 +739,7 @@ const fNotes = $('#f-notes');
 const fSession = $('#f-session');
 const fStage = $('#f-stage');
 const fProject = $('#f-project');
+const fFlag = $('#f-flag');
 
 let draft = null;
 
@@ -713,7 +749,7 @@ function openEditor(id, colId) {
   editing = t ? t.id : 'new';
   draft = t ? clone(t) : {
     title: '', notes: '', projectId: state.filter || null, session: '',
-    columnId: colId || state.columns[0].id,
+    flag: state.flagFilter || false, columnId: colId || state.columns[0].id,
   };
 
   fTitle.value = draft.title;
@@ -722,6 +758,7 @@ function openEditor(id, colId) {
   $('#f-archive').style.visibility = t ? 'visible' : 'hidden';
   renderStage();
   renderProjectChooser();
+  syncFlagBtn();
 
   scrim.hidden = false;
   editor.hidden = false;
@@ -767,6 +804,12 @@ function renderProjectChooser() {
   fProject.append(add);
 }
 
+function syncFlagBtn() {
+  fFlag.setAttribute('aria-pressed', String(!!draft.flag));
+  fFlag.innerHTML = draft.flag ? ICON.starFill : ICON.star;
+  fFlag.title = draft.flag ? 'Unflag' : 'Flag';
+}
+
 function saveEditor() {
   draft.title = fTitle.value.trim();
   draft.notes = fNotes.value.trim();
@@ -802,6 +845,7 @@ function closeEditor() {
 }
 
 $('#f-save').onclick = saveEditor;
+fFlag.onclick = () => { draft.flag = !draft.flag; syncFlagBtn(); };
 $('#f-session-copy').onclick = async () => {
   if (!fSession.value.trim()) return;
   const ok = await copyText(fSession.value.trim());
