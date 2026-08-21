@@ -415,6 +415,27 @@ frame.addEventListener('load', async function run() {
     assert(!chip(), 'chip gone with the last flag');
   });
 
+  await test('sort by project tidies every column into project order, and undo restores', async () => {
+    await reset();
+    const S = W.__board.state;
+    S.projects.push({ id: 'pa', name: 'alpha', color: '#8FB8FF' }, { id: 'pb', name: 'beta', color: '#7FD1AE' });
+    W.addTask({ title: 'beta card', projectId: 'pb', columnId: S.columns[1].id });
+    W.addTask({ title: 'loose card', columnId: S.columns[1].id });
+    W.addTask({ title: 'alpha card', projectId: 'pa', columnId: S.columns[1].id });
+    await sleep(40);
+    const titles = () => [...cardTitles(1)].map(h => h.textContent).join(' | ');
+    eq(titles(), 'alpha card | loose card | beta card | Drag me to another stage', 'seeded newest first');
+    const events = W.__board.state.events.length;
+    D.querySelector('[data-act="sortproj"]').click();
+    await sleep(60);
+    eq(titles(), 'alpha card | beta card | loose card | Drag me to another stage',
+      'grouped in project order, stable within groups, unassigned last');
+    eq(W.__board.state.events.length, events, 'tidying the desk logs nothing');
+    D.getElementById('toast-undo').click();
+    await sleep(60);
+    eq(titles(), 'alpha card | loose card | beta card | Drag me to another stage', 'undo restores the hand order');
+  });
+
   await test('the theme toggles and is remembered', async () => {
     const first = D.documentElement.dataset.theme;
     W.toggleTheme();

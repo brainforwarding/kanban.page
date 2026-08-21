@@ -289,6 +289,23 @@ const BoardCore = (() => {
     return tasks;
   }
 
+  /** One-shot tidy: stable-sort every column into project order — groups in
+      the order given, unassigned cards last (the report's rule) — keeping the
+      hand-made order within each group. Touches only `order`, never the log. */
+  function sortByProject(tasks, projectIds) {
+    const rank = t => {
+      const i = t.projectId ? projectIds.indexOf(t.projectId) : -1;
+      return i === -1 ? projectIds.length : i;
+    };
+    new Set(tasks.map(t => t.columnId)).forEach(colId => {
+      tasks.filter(t => t.columnId === colId)
+        .sort((a, b) => a.order - b.order)  // current hand order first,
+        .sort((a, b) => rank(a) - rank(b))  // then grouped — stably — by project
+        .forEach((t, i) => { t.order = i; });
+    });
+    return tasks;
+  }
+
   /* ── storage ─────────────────────────────────────────── */
 
   function defaultBoard() {
@@ -376,7 +393,7 @@ const BoardCore = (() => {
     ymd, addDays, weekdayIndex, weekdayName, mondayOf, weekRange, weekLabel, dayLabel, contains,
     weeksWithActivity, aggregateWeek, groupByProject, summaryLine, toMarkdown, reportFilename,
     shouldLogMove, isDay, makeEvent, rewriteConflict, rewriteDay,
-    reindex, applyOrder, defaultBoard, migrate,
+    reindex, applyOrder, sortByProject, defaultBoard, migrate,
   };
 })();
 

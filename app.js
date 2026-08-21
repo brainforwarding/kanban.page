@@ -456,6 +456,18 @@ function nudge(id, key) {
 
 const resequence = colId => C.reindex(state.tasks, colId);
 
+/** One shot, stable, undoable: group every column into project order,
+    unassigned last, keeping the hand order within each group. Tidying the
+    desk is planning, not work — no event, no updatedAt, the report never
+    knows. flip() turns the shuffle into the animation for free. */
+function sortBoard() {
+  snapshot();
+  C.sortByProject(state.tasks, state.projects.map(p => p.id));
+  save();
+  render();
+  toast('Sorted by project', undo);
+}
+
 /** Flagging is planning, not work: no event is logged and the age stamp does
     not reset, so the report and "untouched for" never see it. */
 function toggleFlag(id) {
@@ -1204,6 +1216,7 @@ menu.addEventListener('click', e => {
   if (act === 'archive') openArchive();
   if (act === 'theme') toggleTheme();
   if (act === 'addcol') addColumn();
+  if (act === 'sortproj') sortBoard();
   if (act === 'archive-last') archiveLastColumn();
   if (act === 'export') exportBackup();
   if (act === 'import') $('#importFile').click();

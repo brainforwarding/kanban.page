@@ -29,7 +29,7 @@ The board is happiest as its own window, pinned to your dock or taskbar:
 
 - **Capture fast.** Click `+` on any stage (or press `N`) and type. Enter files the card and keeps the field open for the next thought; clicking anywhere else saves what you typed — words are never silently lost. Esc is the only way to throw a draft away.
 - **Drag that feels physical.** Cards lift with a shadow and a tilt that follows your hand; neighbours animate out of the way; the drop flies into place. Respects reduced-motion.
-- **Projects with color.** Filter chips across the top, a color-coded edge on every card. Drag projects to reorder them — that order carries into the report and the export.
+- **Projects with color.** Filter chips across the top, a color-coded edge on every card. Drag projects to reorder them — that order carries into the report, the export, and **⋯ → Sort by project**, which tidies every column into it: stable within a project, unassigned cards last, one Undo away.
 - **Flag what matters.** Hover a card and star it (or press `F` on a focused card). While anything is flagged, a ★ chip beside **All** counts them — a category of its own: press it and the board shows just the flagged cards, across all projects. Flags are planning state, not history — they never touch the weekly report or the age stamp.
 - **A weekly report your team can actually read.** One key (`R`) shows everything created or moved that week, Monday to Sunday. Tick what belongs, export clean Markdown — only finished work, grouped by project, title only.
 - **Made for terminal-agent workflows.** Every card can hold the resume command your coding agent printed (`claude --resume …`, `codex resume …`). Click it on the card and it's on your clipboard; copy one from a terminal and **paste it onto the board** to start a card with the session attached.
@@ -85,12 +85,12 @@ Practical notes:
 ## Tests
 
 ```bash
-node --test tests/core.test.js     # 52 unit tests, no dependencies
+node --test tests/core.test.js     # 53 unit tests, no dependencies
 ```
 
 They cover the parts that are easy to get silently wrong: calendar dates across DST, Monday–Sunday week boundaries across month and year ends, report aggregation, markdown output, re-dating guards, and storage migration.
 
-Then open `tests/dom.test.html` in Chrome for 23 interaction tests — they drive the real app in an iframe (drag a card, chain the composer, generate a report, undo) and report pass/fail in the page title, against a `?ns=test` board that never touches your data.
+Then open `tests/dom.test.html` in Chrome for 24 interaction tests — they drive the real app in an iframe (drag a card, chain the composer, generate a report, undo) and report pass/fail in the page title, against a `?ns=test` board that never touches your data.
 
 ## Files
 

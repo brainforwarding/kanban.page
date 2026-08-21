@@ -509,3 +509,19 @@ test('applyOrder places visible cards in DOM order and parks hidden ones after t
   assert.equal(tasks.find(t => t.id === 'visible1').order, 1);
   assert.equal(tasks.find(t => t.id === 'hidden').order, 2); // kept, not lost
 });
+
+test('sortByProject groups each column into project order, stably, unassigned last', () => {
+  const tasks = [
+    { id: 'a', columnId: 'c1', projectId: 'p2', order: 0 },
+    { id: 'b', columnId: 'c1', projectId: null, order: 1 },
+    { id: 'c', columnId: 'c1', projectId: 'p1', order: 2 },
+    { id: 'd', columnId: 'c1', projectId: 'p2', order: 3 },
+    { id: 'e', columnId: 'c2', projectId: null, order: 0 },
+    { id: 'f', columnId: 'c2', projectId: 'p1', order: 1 },
+  ];
+  C.sortByProject(tasks, ['p1', 'p2']);
+  const seq = col => tasks.filter(t => t.columnId === col)
+    .sort((x, y) => x.order - y.order).map(t => t.id).join('');
+  assert.equal(seq('c1'), 'cadb'); // p1 first, then p2 keeping a before d, unassigned last
+  assert.equal(seq('c2'), 'fe');   // every column gets the treatment
+});
