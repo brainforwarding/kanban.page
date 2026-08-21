@@ -198,6 +198,12 @@ kbd {
 .pill.flagpill { gap: 6px; padding: 0 10px; }
 .pill.flagpill svg { width: 12.5px; height: 12.5px; color: var(--accent-fill); flex: none; }
 
+/* first appearance only (guarded in render): slide in along the rail from
+   the All pill it is pinned beside — presence announces itself once,
+   persistence stays still */
+.pill.flagpill.enter { animation: pillIn .2s var(--ease) both; }
+@keyframes pillIn { from { opacity: 0; transform: translateX(-5px) } }
+
 .tools {
   display: flex;
   align-items: center;

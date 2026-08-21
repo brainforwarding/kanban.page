@@ -121,12 +121,19 @@ $('#searchWrap').insertAdjacentHTML('afterbegin', ICON.search);
 let query = '';
 let composerCol = null;   // column id with an open quick composer
 let editing = null;       // task id being edited, or 'new'
+let hadFlagpill = false;  // ★ chip presence last render — entrance guard
 
 /* ── FLIP ──────────────────────────────────────────────── */
 
 const stillMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
+let flipStagger = null; // one-shot: taskId → delay ms, consumed by the next flip()
+
 function flip(mutate) {
+  // Consume the stagger before any early-out so it can never leak into a
+  // later render — search keystrokes and drag retargets must stay instant.
+  const stagger = flipStagger;
+  flipStagger = null;
   if (stillMotion.matches) { mutate(); return; }
 
   // Rects are read mid-flight on purpose: an interrupted card animates from
@@ -161,9 +168,13 @@ function flip(mutate) {
     const dy = b.top - a.top;
     const dist = Math.hypot(dx, dy);
     if (dist < 0.5) return;
+    // fill:'backwards' holds a delayed card at its old rect until its wave
+    // breaks (a no-op at zero delay, which is every flip but the sort).
     el.animate(
       [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
-      { duration: Math.min(340, 180 + dist * 0.28), easing: EASE }
+      { duration: Math.min(340, 180 + dist * 0.28), easing: EASE,
+        delay: stagger ? stagger(el.dataset.id) : 0,
+        fill: 'backwards' }
     );
   });
 }
@@ -211,15 +222,19 @@ function renderFilters() {
   // category of its own, not a modifier: the row holds one selection, so
   // pressing ★ releases All or the active project, and they release ★.
   const flagged = state.tasks.filter(t => t.flag && onBoard(t)).length;
-  if (flagged || state.flagFilter) {
+  const showFlagpill = flagged > 0 || !!state.flagFilter;
+  if (showFlagpill) {
     const fp = document.createElement('button');
-    fp.className = 'pill flagpill';
+    // .enter only on the absent→present transition; the hundreds of rebuilds
+    // where the chip merely persists recreate it bare (see flip's .enter)
+    fp.className = 'pill flagpill' + (hadFlagpill ? '' : ' enter');
     fp.title = 'Flagged';
     fp.setAttribute('aria-pressed', String(!!state.flagFilter));
     fp.innerHTML = `${ICON.starFill}<span style="color:var(--faint);font:400 10.5px var(--mono)">${flagged}</span>`;
     fp.onclick = () => { state.flagFilter = !state.flagFilter; if (state.flagFilter) state.filter = null; save(); render(); };
     filtersEl.append(fp);
   }
+  hadFlagpill = showFlagpill;
 
   state.projects.forEach(p => {
     const n = state.tasks.filter(t => t.projectId === p.id && onBoard(t)).length;
@@ -459,13 +474,38 @@ const resequence = colId => C.reindex(state.tasks, colId);
 /** One shot, stable, undoable: group every column into project order,
     unassigned last, keeping the hand order within each group. Tidying the
     desk is planning, not work — no event, no updatedAt, the report never
-    knows. flip() turns the shuffle into the animation for free. */
+    knows. */
 function sortBoard() {
   snapshot();
+  // Stagger the FLIP by project index so the rule is visible as it executes:
+  // the first project's cards break first in every column, the next wave
+  // ~45ms later, unassigned settle last — the whole choreography ≤ ~600ms.
+  // One-shot: the next flip() consumes it, so no other render ever staggers.
+  const wave = new Map(state.projects.map((p, i) => [p.id, i]));
+  const last = state.projects.length;
+  const step = Math.min(45, 260 / (last + 1));
+  const delays = new Map(state.tasks.map(t =>
+    [t.id, step * (wave.has(t.projectId) ? wave.get(t.projectId) : last)]));
+  flipStagger = id => delays.get(id) || 0;
   C.sortByProject(state.tasks, state.projects.map(p => p.id));
   save();
   render();
-  toast('Sorted by project', undo);
+  // The board motion is the feedback; the toast is the receipt and the Undo
+  // affordance — let it arrive once the dust has settled, not mid-flight.
+  setTimeout(() => toast('Sorted by project', undo), stillMotion.matches ? 0 : 300);
+}
+
+/** The release half of the press the CSS starts (:active compresses the
+    button): a one-shot pop on a freshly built star SVG, fired imperatively
+    so no later render can replay it. Unstarring is an erasure — quicker,
+    quieter, never celebrated. The fill swap itself stays instant. */
+function popStar(svg, on) {
+  if (!svg || stillMotion.matches) return;
+  svg.animate(
+    on ? [{ transform: 'scale(.55)' }, { transform: 'scale(1)' }]
+       : [{ transform: 'scale(1.18)' }, { transform: 'scale(1)' }],
+    { duration: on ? 220 : 140, easing: EASE }
+  );
 }
 
 /** Flagging is planning, not work: no event is logged and the age stamp does
@@ -477,7 +517,12 @@ function toggleFlag(id) {
   save();
   render();
   const el = board.querySelector(`.card[data-id="${id}"]`);
-  if (el) el.focus();
+  if (el) {
+    el.focus();
+    popStar($('.flag svg', el), t.flag);
+  }
+  // unstarring under the ★ filter removes the card — the siblings' FLIP
+  // explains that; there is nothing left to pop
 }
 
 /* ── copy ──────────────────────────────────────────────── */
@@ -857,7 +902,7 @@ function closeEditor() {
 }
 
 $('#f-save').onclick = saveEditor;
-fFlag.onclick = () => { draft.flag = !draft.flag; syncFlagBtn(); };
+fFlag.onclick = () => { draft.flag = !draft.flag; syncFlagBtn(); popStar($('svg', fFlag), draft.flag); };
 $('#f-session-copy').onclick = async () => {
   if (!fSession.value.trim()) return;
   const ok = await copyText(fSession.value.trim());

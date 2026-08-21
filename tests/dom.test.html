@@ -431,6 +431,7 @@ frame.addEventListener('load', async function run() {
     eq(titles(), 'alpha card | beta card | loose card | Drag me to another stage',
       'grouped in project order, stable within groups, unassigned last');
     eq(W.__board.state.events.length, events, 'tidying the desk logs nothing');
+    await sleep(400); // the receipt arrives after the dust settles (~300ms)
     D.getElementById('toast-undo').click();
     await sleep(60);
     eq(titles(), 'alpha card | loose card | beta card | Drag me to another stage', 'undo restores the hand order');
