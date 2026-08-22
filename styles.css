@@ -485,6 +485,25 @@ kbd {
   100% { clip-path: inset(0 0 0 0);    opacity: 0 }
 }
 
+/* ── compact density ───────────────────────────────────── */
+
+/* Height comes out of padding and secondary content, not the type scale —
+   the mono meta row is already at the legibility floor and stays put.
+   Width goes the other way: columns absorb the viewport, because a title
+   that stops wrapping makes its card a whole line shorter — they only
+   narrow once the board overflows. */
+[data-density="compact"] { --col-w: 264px; }
+/* :not(.ghost-col) or the add-stage strip inherits a column's min-width
+   and silently claims a column's worth of blank screen */
+[data-density="compact"] .col:not(.ghost-col) { min-width: 248px; max-width: 640px; }
+[data-density="compact"] .card { padding: 7px 10px 7px 12px; }
+[data-density="compact"] .card .edge { top: 7px; bottom: 7px; }
+[data-density="compact"] .card h3 { font-size: 13px; line-height: 1.3; }
+[data-density="compact"] .card .flag { top: 4px; right: 5px; }
+[data-density="compact"] .card .note { margin-top: 3px; font-size: 12px; -webkit-line-clamp: 1; }
+[data-density="compact"] .card .meta { margin-top: 5px; }
+[data-density="compact"] .chip { margin-top: 6px; padding: 4px 7px; }
+
 /* a quiet recess, not a dashed outline — dashes are noisy at this density */
 .card.dragging-src {
   background: color-mix(in srgb, var(--raise-hi) 70%, transparent);
@@ -990,6 +1009,9 @@ kbd {
   transition: color .14s, background .14s;
 }
 .menu button kbd { margin-left: auto; }
+.menu button .tick { margin-left: auto; font: 500 11px/1 var(--mono); color: var(--accent); opacity: 0; }
+.menu button .tick + kbd { margin-left: 0; }
+.menu button[aria-pressed="true"] .tick { opacity: 1; }
 .menu button:hover { color: var(--text); background: var(--raise); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 5px 8px; }
 

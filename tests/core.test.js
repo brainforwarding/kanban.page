@@ -473,6 +473,14 @@ test('flags ride through migration, and the flag filter defaults to off', () => 
   assert.equal(C.migrate({ v: 2, columns: [{ id: 'c1', name: 'Inbox' }], tasks: [], events: [] }).flagFilter, false);
 });
 
+test('density rides through migration and defaults to comfortable', () => {
+  assert.equal(C.defaultBoard().density, 'comfortable');
+  const cols = [{ id: 'c1', name: 'Inbox' }];
+  assert.equal(C.migrate({ v: 2, columns: cols, tasks: [], events: [], density: 'compact' }).density, 'compact');
+  assert.equal(C.migrate({ v: 2, columns: cols, tasks: [], events: [] }).density, 'comfortable');
+  assert.equal(C.migrate({ v: 2, columns: cols, tasks: [], events: [], density: 'huge' }).density, 'comfortable');
+});
+
 test('tasks pointing at a stage that no longer exists are rehomed, not lost', () => {
   const s = C.migrate({
     v: 2,

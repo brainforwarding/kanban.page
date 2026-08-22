@@ -312,6 +312,7 @@ const BoardCore = (() => {
     return {
       v: 2,
       theme: 'light',
+      density: 'comfortable',
       asOf: null,
       columns: ['Inbox', 'Doing', 'Waiting', 'Done'].map(name => ({ id: uid(), name })),
       projects: [],
@@ -350,6 +351,7 @@ const BoardCore = (() => {
         events: raw.events,
         projects: raw.projects || [],
         theme: raw.theme || 'light',
+        density: raw.density === 'compact' ? 'compact' : 'comfortable',
         asOf: null,
         filter: raw.filter || null,
         flagFilter: !!raw.flagFilter,
@@ -380,6 +382,7 @@ const BoardCore = (() => {
       ...raw,
       v: 2,
       theme: raw.theme || 'light',
+      density: raw.density === 'compact' ? 'compact' : 'comfortable',
       asOf: null,
       projects: raw.projects || [],
       events,

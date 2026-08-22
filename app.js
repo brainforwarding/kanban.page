@@ -201,6 +201,7 @@ const tasksIn = colId => state.tasks
 
 function render() {
   document.documentElement.dataset.theme = state.theme;
+  document.documentElement.dataset.density = state.density;
   renderFilters();
   flip(renderBoard);
 }
@@ -1260,6 +1261,7 @@ menu.addEventListener('click', e => {
   if (act === 'projects') openProjects();
   if (act === 'archive') openArchive();
   if (act === 'theme') toggleTheme();
+  if (act === 'density') toggleDensity();
   if (act === 'addcol') addColumn();
   if (act === 'sortproj') sortBoard();
   if (act === 'archive-last') archiveLastColumn();
@@ -1274,11 +1276,20 @@ $('#menuBtn').addEventListener('click', () => {
   $('#act-archive-last').textContent = col
     ? `Archive ${col.name.toLowerCase()}${n ? ` (${n})` : ''}`
     : 'Archive finished';
+  $('#act-density').setAttribute('aria-pressed', String(state.density === 'compact'));
 });
 
 function toggleTheme() {
   state.theme = state.theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = state.theme;
+  save();
+}
+
+function toggleDensity() {
+  state.density = state.density === 'compact' ? 'comfortable' : 'compact';
+  // flip() so every card glides to its new rect instead of the board snapping
+  flip(() => { document.documentElement.dataset.density = state.density; });
+  $('#act-density').setAttribute('aria-pressed', String(state.density === 'compact'));
   save();
 }
 
@@ -1482,6 +1493,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'p') { e.preventDefault(); openProjects(); }
   else if (e.key === 'a') { e.preventDefault(); openArchive(); }
   else if (e.key === 't') { e.preventDefault(); toggleTheme(); }
+  else if (e.key === 'd') { e.preventDefault(); toggleDensity(); }
   else if (e.key === '/') { e.preventDefault(); qInput.focus(); }
 });
 

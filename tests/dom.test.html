@@ -446,6 +446,19 @@ frame.addEventListener('load', async function run() {
     W.toggleTheme();
   });
 
+  await test('compact cards toggle the density and are remembered', async () => {
+    eq(D.documentElement.dataset.density, 'comfortable', 'starts comfortable');
+    W.toggleDensity();
+    eq(D.documentElement.dataset.density, 'compact', 'compact on');
+    eq(D.getElementById('act-density').getAttribute('aria-pressed'), 'true', 'menu shows the tick');
+    await sleep(200);
+    eq(JSON.parse(W.localStorage.getItem('board.v2.test')).density, 'compact', 'persisted');
+    await reload();
+    eq(D.documentElement.dataset.density, 'compact', 'still compact after a reload');
+    W.toggleDensity();
+    await sleep(200);
+  });
+
   await test('a stage can be renamed without rewriting past reports', async () => {
     const before = W.__board.state.events.map(e => e.to);
     W.__board.state.columns[0].name = 'Someday';
