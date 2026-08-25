@@ -659,7 +659,7 @@ const copyTimers = new WeakMap();
     The wash and the check carry the confirmation instead. */
 async function copyChip(chip, text) {
   const ok = await copyText(text);
-  if (!ok) { toast('Could not copy'); return; }
+  if (!ok) { toast(tr('couldNotCopy')); return; }
 
   const ci = $('.ci', chip);
   clearTimeout(copyTimers.get(chip));
@@ -1065,7 +1065,7 @@ function renderProjects() {
 
   if (!state.projects.length) {
     list.innerHTML = `<p style="margin:18px 8px;font:400 12.5px/1.6 var(--ui);color:var(--faint)">
-      Add the repos and clients you work on. They become filters up top and a picker on every task.</p>`;
+      ${locale === 'es' ? 'Añade los repositorios y clientes en los que trabajas. Se convierten en filtros arriba y en un selector para cada tarea.' : 'Add the repos and clients you work on. They become filters up top and a picker on every task.'}</p>`;
   }
 
   state.projects.forEach(p => {
@@ -1106,7 +1106,7 @@ function renderProjects() {
         state.tasks.forEach(t => { if (t.projectId === p.id) t.projectId = null; });
         if (state.filter === p.id) state.filter = null;
         save(); render(); renderProjects();
-        toast('Project deleted', () => { undo(); renderProjects(); });
+        toast(tr('projectDeleted'), () => { undo(); renderProjects(); });
       };
     }
 
@@ -1293,8 +1293,8 @@ function closeArchive() {
 function archStamp(ms) {
   const day = C.ymd(ms);
   const today = C.ymd();
-  if (day === today) return 'today';
-  if (day === C.addDays(today, -1)) return 'yesterday';
+  if (day === today) return tr('today');
+  if (day === C.addDays(today, -1)) return tr('yesterday');
   return day;
 }
 
@@ -1302,17 +1302,17 @@ function renderArchive() {
   const items = archivedTasks().sort((a, b) => b.archivedAt - a.archivedAt);
   archList.innerHTML = '';
   archEmptyBtn.hidden = items.length === 0;
-  archEmptyBtn.textContent = armed.has('all') ? 'Delete all — sure?' : 'Delete all';
+  archEmptyBtn.textContent = armed.has('all') ? `${tr('deleteAll')} — ${tr('sure')}` : tr('deleteAll');
   archEmptyBtn.classList.toggle('armed', armed.has('all'));
   $('#arch-n').textContent = items.length
-    ? `${items.length} ${items.length === 1 ? 'task' : 'tasks'}`
+    ? `${items.length} ${locale === 'es' ? (items.length === 1 ? 'tarea' : 'tareas') : (items.length === 1 ? 'task' : 'tasks')}`
     : '';
 
   if (!items.length) {
     archList.innerHTML = `<p style="margin:18px 8px;font:400 12.5px/1.6 var(--ui);color:var(--faint)">
-      Nothing archived yet. Finished with a stage? <b style="font-weight:600">Archive ${
+      ${tr('noArchived')} ${locale === 'es' ? '¿Terminaste una etapa? <b style="font-weight:600">Archivar ' : 'Finished with a stage? <b style="font-weight:600">Archive '}${
         esc((state.columns[state.columns.length - 1] || {}).name || 'done').toLowerCase()
-      }</b> in the ⋯ menu clears it off the board without losing the record — your weekly report still counts it.</p>`;
+      }</b>${locale === 'es' ? ' en el menú ⋯ la quita del tablero sin perder el registro; el informe semanal la conserva.</p>' : ' in the ⋯ menu clears it off the board without losing the record — your weekly report still counts it.</p>'}`;
     return;
   }
 
@@ -1325,11 +1325,11 @@ function renderArchive() {
     row.innerHTML = `
       <span class="edge"${p ? '' : ' hidden'}></span>
       <div class="atext">
-        <span class="atitle">${esc(t.title || 'Untitled')}</span>
+        <span class="atitle">${esc(t.title || tr('untitled'))}</span>
         <span class="ameta">${esc(t.archivedFrom || '—')} · ${archStamp(t.archivedAt)}</span>
       </div>
-      <button class="ghost sm" data-restore>Restore</button>
-      <button class="ghost sm danger${isArmed ? ' armed' : ''}" data-del>${isArmed ? 'Sure?' : 'Delete'}</button>`;
+      <button class="ghost sm" data-restore>${tr('restore')}</button>
+      <button class="ghost sm danger${isArmed ? ' armed' : ''}" data-del>${isArmed ? tr('sure') : tr('delete')}</button>`;
 
     $('[data-restore]', row).onclick = () => { disarm(); restoreTask(t.id); };
     $('[data-del]', row).onclick = () => {
@@ -1483,7 +1483,7 @@ function restoreTask(id) {
   save();
   render();
   renderArchive();
-  toast('Restored', () => { undo(); renderArchive(); });
+  toast(tr('restore'), () => { undo(); renderArchive(); });
 }
 
 function deleteForever(ids) {
@@ -1495,7 +1495,7 @@ function deleteForever(ids) {
   render();
   renderArchive();
   // The report still lists these — it keeps a title snapshot on every event.
-  toast(ids.length === 1 ? 'Deleted' : `Deleted ${ids.length}`, () => { undo(); renderArchive(); });
+  toast(locale === 'es' ? `Eliminada${ids.length === 1 ? '' : 's'} ${ids.length}` : `Deleted ${ids.length}`, () => { undo(); renderArchive(); });
 }
 
 /* ── undo + toast ──────────────────────────────────────── */
@@ -1697,7 +1697,7 @@ function renderReport(reset) {
     : repWeek === C.addDays(thisWeek, -7) ? tr('lastWeek') : null;
   const done = state.columns[state.columns.length - 1].name;
   $('#rep-sum').textContent = repEntries.length
-    ? [rel, C.summaryLine(repEntries, done)].filter(Boolean).join(' · ')
+    ? [rel, C.summaryLine(repEntries, done, locale)].filter(Boolean).join(' · ')
     : (rel || '');
 
   const body = $('#rep-body');
@@ -1801,6 +1801,7 @@ function reportMarkdown() {
   return C.toMarkdown(selected(), repWeek, {
     projectOrder: state.projects.map(p => p.name),
     doneStage: state.columns[state.columns.length - 1].name,
+    locale,
   });
 }
 
@@ -1824,10 +1825,10 @@ $('#rep-save').onclick = () => {
   const blob = new Blob([reportMarkdown()], { type: 'text/markdown' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = C.reportFilename(repWeek);
+  a.download = C.reportFilename(repWeek, locale);
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  toast(`Saved ${C.reportFilename(repWeek)}`);
+  toast(`${locale === 'es' ? 'Guardado' : 'Saved'} ${C.reportFilename(repWeek, locale)}`);
 };
 
 $('#rep-week').onclick = e => {

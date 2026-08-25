@@ -182,23 +182,25 @@ const BoardCore = (() => {
 
   /* ── markdown ────────────────────────────────────────── */
 
-  function summaryLine(entries, doneStage) {
+  function summaryLine(entries, doneStage, locale = 'en') {
     const n = entries.length;
-    const parts = [`${n} card${n === 1 ? '' : 's'}`];
+    const es = locale === 'es';
+    const parts = [es ? `${n} ${n === 1 ? 'tarjeta' : 'tarjetas'}` : `${n} card${n === 1 ? '' : 's'}`];
     const created = entries.filter(e => e.created).length;
-    if (created) parts.push(`${created} created`);
+    if (created) parts.push(es ? `${created} cread${created === 1 ? 'a' : 'as'}` : `${created} created`);
     if (doneStage) {
       const finished = entries.filter(e => e.to === doneStage).length;
-      if (finished) parts.push(`${finished} finished`);
+      if (finished) parts.push(es ? `${finished} finalizada${finished === 1 ? '' : 's'}` : `${finished} finished`);
     }
     return parts.join(' · ');
   }
 
   function toMarkdown(entries, monday, opts = {}) {
-    const lines = [`# Progress — ${weekLabel(monday)}`, ''];
+    const es = opts.locale === 'es';
+    const lines = [`# ${es ? 'Progreso' : 'Progress'} — ${weekLabel(monday, opts.locale)}`, ''];
 
     if (!entries.length) {
-      lines.push('No activity recorded.', '');
+      lines.push(es ? 'No hay actividad registrada.' : 'No activity recorded.', '');
       return lines.join('\n');
     }
 
@@ -209,7 +211,7 @@ const BoardCore = (() => {
       .filter(e => e.project);
 
     if (!finished.length) {
-      lines.push('Nothing finished.', '');
+      lines.push(es ? 'No se terminó nada.' : 'Nothing finished.', '');
       return lines.join('\n');
     }
 
@@ -221,7 +223,7 @@ const BoardCore = (() => {
     return lines.join('\n');
   }
 
-  const reportFilename = monday => `progress-${monday}.md`;
+  const reportFilename = (monday, locale = 'en') => `${locale === 'es' ? 'progreso' : 'progress'}-${monday}.md`;
 
   /* ── event log ───────────────────────────────────────── */
 
