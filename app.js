@@ -217,6 +217,12 @@ updateBtn.onclick = () => {
   if (!pendingWorker) return;
   reloadingForUpdate = true;
   pendingWorker.postMessage('skip-waiting');
+  // controllerchange is the normal, atomic route. A few browser/PWA shells
+  // fail to surface it reliably; after activation has had time to finish, a
+  // reload is still safer than leaving someone on a stale release.
+  setTimeout(() => {
+    if (reloadingForUpdate) location.reload();
+  }, 1800);
 };
 
 installPwa();

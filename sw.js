@@ -28,17 +28,23 @@ self.addEventListener('activate', event => {
 });
 
 self.addEventListener('message', event => {
-  if (event.data === 'skip-waiting') self.skipWaiting();
+  if (event.data === 'skip-waiting') event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
 
   if (event.request.mode === 'navigate') {
-    event.respondWith(caches.match(event.request).then(cached => cached || caches.match('./')));
+    // Never search every cache: an older shell could otherwise win the match
+    // during an update and make the freshly activated app look unchanged.
+    event.respondWith(caches.open(CACHE).then(cache =>
+      cache.match(event.request).then(cached => cached || cache.match('./'))
+    ));
     return;
   }
 
   if (new URL(event.request.url).origin !== self.location.origin) return;
-  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request)));
+  event.respondWith(caches.open(CACHE).then(cache =>
+    cache.match(event.request).then(cached => cached || fetch(event.request))
+  ));
 });
