@@ -1,6 +1,8 @@
 # kanban.html
 
-A personal kanban that runs from a single folder of files. No install, no build step, no server, no account, no network — download it, open `index.html` in your browser, and start typing.
+A personal kanban with no build step, account, or backend. Use it at the hosted
+URL (installable and offline-capable after the first visit), or download it and
+open `index.html` in your browser.
 
 ![the board](docs/shots/board.png)
 
@@ -8,7 +10,20 @@ It looks and moves like a polished app because the details are tuned by hand: ca
 
 ![dark mode](docs/shots/dark.png)
 
-## Try it in 30 seconds
+## Use it your way
+
+- **Use the web app:** [brainforwarding.github.io/kanban.html](https://brainforwarding.github.io/kanban.html/)
+  is the canonical version. Visit it once online; you can then install it from
+  your browser and use it offline. It offers **Actualizar** when a new version
+  is ready.
+- **Run it locally:** clone or download this repository, then open
+  `index.html`. This remains fully private and offline, but you update it by
+  downloading newer files yourself.
+- **Make it yours:** [fork the repository](https://github.com/brainforwarding/kanban.html/fork)
+  on GitHub, change it however you like, and optionally publish your own fork
+  with GitHub Pages.
+
+## Run locally in 30 seconds
 
 ```bash
 git clone https://github.com/brainforwarding/kanban.html.git   # or Code → Download ZIP
@@ -16,6 +31,18 @@ open kanban.html/index.html                                    # macOS — or ju
 ```
 
 That's it. The board lives in that browser's `localStorage`; nothing ever leaves your machine.
+
+## Web app, offline use, and updates
+
+The canonical web app is the URL above. Visit it once online, then install it
+from your browser's app/install menu if you like. It will open offline after
+that first visit. When a new version is published, the running app offers
+**Actualizar**. Your cards remain in your browser — an update changes the app
+files, not your board data. The downloadable `file://` version remains
+supported, but cannot update itself; download a newer release to update it.
+
+Moving from a downloaded board to the web app is a one-time manual move:
+**Export backup** in the downloaded board, then **Import backup** on the web.
 
 ## Make it feel like an app
 

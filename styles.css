@@ -1049,6 +1049,36 @@ kbd {
 }
 .toast button:hover { background: var(--accent-fill); color: var(--accent-ink); }
 
+/* A new worker waits until the person explicitly accepts it, so an update
+   never changes the running app underneath an in-progress edit. */
+.update-notice {
+  position: fixed;
+  z-index: 400;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(calc(100vw - 32px), 390px);
+  padding: 10px 10px 10px 14px;
+  border: 1px solid var(--line-hi);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--sh-2);
+  color: var(--text);
+  font: 500 12px/1.3 var(--ui);
+}
+.update-notice button {
+  flex: none;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--accent-fill);
+  color: var(--accent-ink);
+  font: 600 12px/1 var(--ui);
+}
+.update-notice button:hover { filter: brightness(.96); }
+
 /* ── weekly report ─────────────────────────────────────── */
 
 .sheet.wide {
@@ -1210,6 +1240,7 @@ button[disabled] { opacity: .4; pointer-events: none; }
   .search { width: 34px; padding: 0 10px; }
   .search:focus-within { width: 160px; }
   .board { gap: 10px; padding: 14px 10px 16px; }
+  .update-notice { right: 10px; bottom: 10px; }
   .col { width: min(84vw, var(--col-w)); }
   .sheet { top: auto; bottom: 0; border-radius: 16px 16px 0 0; width: 100vw; }
   @keyframes sheetIn {

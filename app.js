@@ -112,6 +112,56 @@ const panel = $('#projects');
 const menu = $('#menu');
 const qInput = $('#q');
 
+/* ── PWA updates ───────────────────────────────────────── */
+
+const updateNotice = $('#updateNotice');
+const updateBtn = $('#updateBtn');
+let pendingWorker = null;
+let reloadingForUpdate = false;
+
+function offerUpdate(worker) {
+  pendingWorker = worker;
+  updateNotice.hidden = false;
+}
+
+function installPwa() {
+  // `file:` keeps working as the downloadable, no-server version. PWA features
+  // activate only from a secure hosted URL (or localhost while developing).
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloadingForUpdate) location.reload();
+  });
+
+  navigator.serviceWorker.register('./sw.js').then(registration => {
+    if (registration.waiting && navigator.serviceWorker.controller) {
+      offerUpdate(registration.waiting);
+    }
+
+    registration.addEventListener('updatefound', () => {
+      const worker = registration.installing;
+      if (!worker) return;
+      worker.addEventListener('statechange', () => {
+        if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+          offerUpdate(worker);
+        }
+      });
+    });
+
+    // Browsers throttle automatic checks; opening the board online should still
+    // discover a newly deployed version promptly.
+    registration.update().catch(() => {});
+  }).catch(err => console.warn('board: service worker registration failed —', err));
+}
+
+updateBtn.onclick = () => {
+  if (!pendingWorker) return;
+  reloadingForUpdate = true;
+  pendingWorker.postMessage('skip-waiting');
+};
+
+installPwa();
+
 $('#newTask').innerHTML = ICON.plus;
 $('#menuBtn').innerHTML = ICON.more;
 $('#f-session-copy').innerHTML = ICON.copy;
