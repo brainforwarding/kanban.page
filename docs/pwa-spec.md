@@ -21,8 +21,9 @@ networked board data is introduced.
 
 1. A service worker checks for a changed app shell when the app starts.
 2. If a new worker is waiting, the UI shows a small, persistent Spanish notice:
-   `Hay una actualización disponible` with an `Actualizar` button.
-3. `Actualizar` asks the waiting worker to activate, then reloads only after it
+   a localized notice: `Update available` / `Update` in English and
+   `Hay una actualización disponible` / `Actualizar` in Spanish.
+3. The update button asks the waiting worker to activate, then reloads only after it
    takes control. This prevents a mixed old/new asset set.
 4. Until the person chooses it, their current session continues unchanged.
 5. A first visit still requires an internet connection; subsequent visits work
@@ -41,9 +42,9 @@ networked board data is introduced.
 
 - The active worker serves its complete app shell from its own cache, including
   navigation. A new worker precaches the next complete shell separately and
-  waits for `Actualizar`; this avoids mixing new HTML with old JavaScript.
+  waits for an explicit update; this avoids mixing new HTML with old JavaScript.
 - Versioned cache names are removed during worker activation.
-- The worker claims clients only after the person clicks `Actualizar`, then the
+- The worker claims clients only after the person accepts the update, then the
   client reloads once on `controllerchange`.
 - Same-origin static assets are cache-first after installation; a changed
   service worker version refreshes the full cache together.
@@ -55,8 +56,8 @@ networked board data is introduced.
 - The manifest validates and the browser offers installation on a supported
   browser.
 - After one online visit, turning off the network still opens the board.
-- Deploying a changed version results in exactly one update notice; pressing
-  `Actualizar` reloads into the new version.
+- Deploying a changed version results in exactly one localized update notice;
+  accepting it reloads into the new version.
 - Existing board content remains after updating.
 - Existing unit and DOM tests continue to pass.
 - Manual PWA verification covers first install (no notice), offline reload,

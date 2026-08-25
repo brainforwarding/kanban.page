@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>board</title>
 <meta name="theme-color" content="#F1F0F5">
+<meta name="description" content="A private, local kanban board that works offline.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://brainforwarding.github.io/kanban.html/">
+<meta property="og:title" content="board — a private local kanban">
+<meta property="og:description" content="A private, local kanban board that works offline.">
+<meta property="og:image" content="https://brainforwarding.github.io/kanban.html/assets/og-kanban.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="board — a private local kanban">
+<meta name="twitter:description" content="A private, local kanban board that works offline.">
+<meta name="twitter:image" content="https://brainforwarding.github.io/kanban.html/assets/og-kanban.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2314131A'/><rect x='9' y='7' width='6' height='18' rx='1.5' fill='%23FFB454'/><rect x='18' y='7' width='6' height='11' rx='1.5' fill='%235B5768'/></svg>">
@@ -22,7 +34,7 @@
     </label>
     <button class="icon" id="reportBtn" title="Weekly report &nbsp;R"></button>
     <button class="icon" id="newTask" title="New task &nbsp;N"></button>
-    <button class="icon" id="menuBtn" title="More"></button>
+    <button class="icon" id="menuBtn" title="More" aria-label="More" aria-expanded="false"></button>
   </div>
 </header>
 
@@ -38,12 +50,12 @@
     <textarea id="f-notes" class="f-notes" rows="3" placeholder="Notes"></textarea>
 
     <div class="field">
-      <span class="lbl">Project</span>
+      <span class="lbl" id="projectLabel">Project</span>
       <div class="chooser" id="f-project"></div>
     </div>
 
     <div class="field">
-      <span class="lbl">Session</span>
+      <span class="lbl" id="sessionLabel">Session</span>
       <div class="cmd-input" id="f-session-wrap">
         <span class="caret">&#9656;</span>
         <input id="f-session" type="text" spellcheck="false" autocomplete="off" placeholder="claude --resume 2d2bb76b-…">
@@ -129,6 +141,12 @@
   <hr>
   <button data-act="export">Export backup</button>
   <button data-act="import">Import backup</button>
+  <hr>
+  <div class="menu-label" id="languageLabel">Language</div>
+  <div role="group" aria-label="Language" id="languageChoices">
+    <button data-locale="en" role="menuitemradio" aria-checked="true">English<span class="locale-check">✓</span></button>
+    <button data-locale="es" role="menuitemradio" aria-checked="false">Español<span class="locale-check">✓</span></button>
+  </div>
 </div>
 
 <div class="toast" id="toast" hidden>
@@ -137,12 +155,13 @@
 </div>
 
 <aside class="update-notice" id="updateNotice" hidden role="status" aria-live="polite">
-  <span>Hay una actualización disponible</span>
-  <button id="updateBtn">Actualizar</button>
+  <span id="updateText">Update available</span>
+  <button id="updateBtn">Update</button>
 </aside>
 
 <input type="file" id="importFile" accept="application/json,.json" hidden>
 
+<script src="i18n.js"></script>
 <script src="core.js"></script>
 <script src="app.js"></script>
 </body>

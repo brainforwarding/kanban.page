@@ -5,6 +5,7 @@ const APP_SHELL = [
   './index.html',
   './styles.css',
   './core.js',
+  './i18n.js',
   './app.js',
   './manifest.webmanifest',
   './assets/icon.svg',

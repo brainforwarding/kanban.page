@@ -14,8 +14,8 @@ It looks and moves like a polished app because the details are tuned by hand: ca
 
 - **Use the web app:** [brainforwarding.github.io/kanban.html](https://brainforwarding.github.io/kanban.html/)
   is the canonical version. Visit it once online; you can then install it from
-  your browser and use it offline. It offers **Actualizar** when a new version
-  is ready.
+  your browser and use it offline. It offers **Update** (or **Actualizar** in
+  Spanish) when a new version is ready.
 - **Run it locally:** clone or download this repository, then open
   `index.html`. This remains fully private and offline, but you update it by
   downloading newer files yourself.
@@ -37,7 +37,7 @@ That's it. The board lives in that browser's `localStorage`; nothing ever leaves
 The canonical web app is the URL above. Visit it once online, then install it
 from your browser's app/install menu if you like. It will open offline after
 that first visit. When a new version is published, the running app offers
-**Actualizar**. Your cards remain in your browser — an update changes the app
+**Update** / **Actualizar**. Your cards remain in your browser — an update changes the app
 files, not your board data. The downloadable `file://` version remains
 supported, but cannot update itself; download a newer release to update it.
 

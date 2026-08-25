@@ -30,6 +30,12 @@ const COLOR_NAMES = ['Amber', 'Mint', 'Sky', 'Rose', 'Violet', 'Cyan', 'Gold', '
 /* ── state ─────────────────────────────────────────────── */
 
 const C = BoardCore;
+const I = BoardI18n;
+
+const LOCALE_KEY = 'board.locale';
+let locale = 'en';
+try { locale = I.valid(localStorage.getItem(LOCALE_KEY)); } catch (err) { /* English fallback */ }
+const tr = (key, vars) => I.t(locale, key, vars);
 
 // ?ns=… gives a board its own storage. Tests use it; so can a scratch board.
 const NS = new URLSearchParams(location.search).get('ns');
@@ -38,11 +44,11 @@ const LEGACY_KEY = NS ? null : 'board.v1';
 
 /** First ever run: one card, so the session line is discoverable. */
 function firstRun() {
-  const s = C.defaultBoard();
+  const s = C.defaultBoard(locale);
   const now = Date.now();
   const t = {
     id: C.uid(),
-    title: 'Drag me to another stage',
+    title: locale === 'es' ? 'Arrástrame a otra etapa' : 'Drag me to another stage',
     notes: '',
     projectId: null,
     session: 'claude --resume 2d2bb76b-e6df-46c5-b742-8eab8c3c7303',
@@ -70,7 +76,60 @@ function load() {
   return raw ? C.migrate(raw) : firstRun();
 }
 
+function applyLocale() {
+  document.documentElement.lang = locale;
+  document.title = 'board';
+  $('#q').placeholder = tr('search');
+  $('#reportBtn').title = `${tr('report')}  R`;
+  $('#newTask').title = `${tr('newTask')}  N`;
+  $('#menuBtn').title = tr('more');
+  $('#menuBtn').setAttribute('aria-label', tr('more'));
+  $('#updateText').textContent = tr('updateAvailable');
+  $('#updateBtn').textContent = tr('update');
+  $('#toast-undo').textContent = tr('undo');
+  $('#editor').setAttribute('aria-label', tr('task'));
+  $('#f-title').placeholder = tr('what');
+  $('#f-notes').placeholder = tr('notes');
+  $('#projectLabel').textContent = tr('project');
+  $('#sessionLabel').textContent = tr('session');
+  $('#f-session-copy').title = tr('copy');
+  $('#f-archive').textContent = tr('archive');
+  $('#f-flag').title = tr('flag');
+  $('#f-save').textContent = tr('save');
+  $('#report').setAttribute('aria-label', tr('weeklyReport'));
+  $('#rep-prev').title = tr('previousWeek'); $('#rep-next').title = tr('nextWeek'); $('#rep-close').title = tr('close');
+  $('#rep-all').textContent = tr('selectAll'); $('#rep-copy').textContent = tr('copyMarkdown'); $('#rep-save').textContent = tr('download');
+  $('#projects').setAttribute('aria-label', tr('projects')); $('#projects h2').textContent = tr('projects');
+  $('#proj-name').placeholder = tr('newProject'); $('#proj-add button').textContent = tr('add');
+  $('#archive').setAttribute('aria-label', tr('archive')); $('#archive h2').textContent = tr('archive');
+  $('#arch-empty').textContent = tr('deleteAll');
+  const menuText = { projects: tr('projects'), archive: tr('archive'), theme: tr('theme'), addcol: tr('addStage'), sortproj: tr('sortProject'), export: tr('export'), import: tr('import') };
+  Object.entries(menuText).forEach(([act, label]) => {
+    const b = $(`[data-act="${act}"]`); if (b) b.childNodes[0].textContent = label;
+  });
+  const density = $('#act-density');
+  if (density) density.childNodes[0].textContent = tr('compact');
+  $('#languageLabel').textContent = tr('language');
+  $('#languageChoices').setAttribute('aria-label', tr('language'));
+  $$('#languageChoices button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.locale === locale)));
+}
+
+function setLocale(next) {
+  next = I.valid(next);
+  if (next === locale) return;
+  locale = next;
+  try { localStorage.setItem(LOCALE_KEY, locale); } catch (err) { /* session-only */ }
+  applyLocale();
+  render();
+  if (!editor.hidden) openEditor(editing === 'new' ? null : editing);
+  if (!panel.hidden) renderProjects();
+  if (!archiveEl.hidden) renderArchive();
+  if (!reportEl.hidden) renderReport(false);
+  $('#menuBtn').focus();
+}
+
 let state = load();
+applyLocale();
 let saveTimer = null;
 
 function save() {
@@ -263,7 +322,7 @@ function renderFilters() {
   const all = document.createElement('button');
   all.className = 'pill';
   all.setAttribute('aria-pressed', String(!state.filter && !state.flagFilter));
-  all.textContent = 'All'; // no dot: the dot means "a project", and All is not one
+  all.textContent = tr('all'); // no dot: the dot means "a project", and All is not one
   all.onclick = () => { state.filter = null; state.flagFilter = false; save(); render(); };
   filtersEl.append(all);
 
@@ -279,7 +338,7 @@ function renderFilters() {
     // .enter only on the absent→present transition; the hundreds of rebuilds
     // where the chip merely persists recreate it bare (see flip's .enter)
     fp.className = 'pill flagpill' + (hadFlagpill ? '' : ' enter');
-    fp.title = 'Flagged';
+    fp.title = tr('flagged');
     fp.setAttribute('aria-pressed', String(!!state.flagFilter));
     fp.innerHTML = `${ICON.starFill}<span style="color:var(--faint);font:400 10.5px var(--mono)">${flagged}</span>`;
     fp.onclick = () => { state.flagFilter = !state.flagFilter; if (state.flagFilter) state.filter = null; save(); render(); };
@@ -321,8 +380,8 @@ function renderBoard() {
         <span class="col-name" contenteditable="plaintext-only" spellcheck="false">${esc(col.name)}</span>
         <span class="col-count">${items.length}</span>
         <span class="grow"></span>
-        <button class="icon sm" data-add title="Add task">${ICON.plus}</button>
-        ${total === 0 && state.columns.length > 1 ? `<button class="icon sm" data-del title="Delete stage">${ICON.close}</button>` : ''}
+        <button class="icon sm" data-add title="${tr('newTask')}">${ICON.plus}</button>
+        ${total === 0 && state.columns.length > 1 ? `<button class="icon sm" data-del title="${tr('delete')} ${tr('task')}">${ICON.close}</button>` : ''}
       </div>
       <div class="col-body"></div>`;
 
@@ -414,7 +473,7 @@ function cardEl(t) {
 function composerEl(colId) {
   const el = document.createElement('div');
   el.className = 'composer';
-  el.innerHTML = '<textarea rows="1" placeholder="What needs doing?" spellcheck="false"></textarea>';
+  el.innerHTML = `<textarea rows="1" placeholder="${tr('what')}" spellcheck="false"></textarea>`;
   const ta = $('textarea', el);
 
   const grow = () => { ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px'; };
@@ -543,7 +602,7 @@ function sortBoard() {
   render();
   // The board motion is the feedback; the toast is the receipt and the Undo
   // affordance — let it arrive once the dust has settled, not mid-flight.
-  setTimeout(() => toast('Sorted by project', undo), stillMotion.matches ? 0 : 300);
+  setTimeout(() => toast(tr('sorted'), undo), stillMotion.matches ? 0 : 300);
 }
 
 /** The release half of the press the CSS starts (:active compresses the
@@ -837,7 +896,7 @@ function deleteColumn(id) {
   state.columns = state.columns.filter(c => c.id !== id);
   save();
   render();
-  toast('Stage deleted', undo);
+  toast(tr('stageDeleted'), undo);
 }
 
 /* ── editor ────────────────────────────────────────────── */
@@ -889,7 +948,7 @@ function renderProjectChooser() {
   fProject.innerHTML = '';
   const none = document.createElement('button');
   none.className = 'pill';
-  none.textContent = 'None';
+  none.textContent = tr('none');
   none.setAttribute('aria-pressed', String(!draft.projectId));
   none.onclick = () => { draft.projectId = null; renderProjectChooser(); };
   fProject.append(none);
@@ -915,7 +974,7 @@ function renderProjectChooser() {
 function syncFlagBtn() {
   fFlag.setAttribute('aria-pressed', String(!!draft.flag));
   fFlag.innerHTML = draft.flag ? ICON.starFill : ICON.star;
-  fFlag.title = draft.flag ? 'Unflag' : 'Flag';
+  fFlag.title = draft.flag ? tr('unflag') : tr('flag');
 }
 
 function saveEditor() {
@@ -969,7 +1028,7 @@ $('#f-archive').onclick = () => {
   closeEditor();
   if (!t) return;
   archiveTasks([t]);
-  toast('Task archived', undo);
+  toast(tr('taskArchived'), undo);
 };
 
 fTitle.addEventListener('input', () => autogrow(fTitle));
@@ -1297,16 +1356,22 @@ $('[data-close]', archiveEl).onclick = closeArchive;
 $('#menuBtn').onclick = e => {
   e.stopPropagation();
   menu.hidden = !menu.hidden;
+  $('#menuBtn').setAttribute('aria-expanded', String(!menu.hidden));
 };
 
 document.addEventListener('click', e => {
-  if (!menu.hidden && !e.target.closest('#menu') && !e.target.closest('#menuBtn')) menu.hidden = true;
+  if (!menu.hidden && !e.target.closest('#menu') && !e.target.closest('#menuBtn')) {
+    menu.hidden = true;
+    $('#menuBtn').setAttribute('aria-expanded', 'false');
+  }
 });
 
 menu.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
+  if (b.dataset.locale) { menu.hidden = true; $('#menuBtn').setAttribute('aria-expanded', 'false'); setLocale(b.dataset.locale); return; }
   menu.hidden = true;
+  $('#menuBtn').setAttribute('aria-expanded', 'false');
   const act = b.dataset.act;
   if (act === 'projects') openProjects();
   if (act === 'archive') openArchive();
@@ -1625,11 +1690,11 @@ function renderReport(reset) {
   }
   repSel = sel;
 
-  repLabel.textContent = C.weekLabel(repWeek);
+  repLabel.textContent = C.weekLabel(repWeek, locale);
 
   const thisWeek = C.mondayOf(C.ymd());
-  const rel = repWeek === thisWeek ? 'This week'
-    : repWeek === C.addDays(thisWeek, -7) ? 'Last week' : null;
+  const rel = repWeek === thisWeek ? tr('thisWeek')
+    : repWeek === C.addDays(thisWeek, -7) ? tr('lastWeek') : null;
   const done = state.columns[state.columns.length - 1].name;
   $('#rep-sum').textContent = repEntries.length
     ? [rel, C.summaryLine(repEntries, done)].filter(Boolean).join(' · ')
@@ -1639,7 +1704,7 @@ function renderReport(reset) {
   body.innerHTML = '';
 
   if (!repEntries.length) {
-    body.innerHTML = '<p class="rep-empty">Nothing moved</p>';
+    body.innerHTML = `<p class="rep-empty">${tr('nothingMoved')}</p>`;
   } else {
     const order = state.projects.map(p => p.name);
     C.groupByProject(repEntries, order).forEach(g => {
@@ -1654,7 +1719,7 @@ function renderReport(reset) {
   }
 
   $('#rep-count').textContent = `${repSel.size} / ${repEntries.length}`;
-  $('#rep-all').textContent = repSel.size === repEntries.length && repEntries.length ? 'Select none' : 'Select all';
+  $('#rep-all').textContent = repSel.size === repEntries.length && repEntries.length ? tr('selectNone') : tr('selectAll');
   $('#rep-copy').disabled = !repSel.size;
   $('#rep-save').disabled = !repSel.size;
 
@@ -1672,7 +1737,7 @@ function reportRow(e) {
     <span class="rf">${e.netZero
       ? `${esc(e.to)} <i>&#8634;</i>`
       : `${esc(e.from)}<i>&#8594;</i>${esc(e.to)}`}</span>
-    <button class="rd" title="Change the day this is reported on">${C.dayLabel(e.day)}</button>`;
+    <button class="rd" title="${tr('weeklyReport')}">${C.dayLabel(e.day, locale)}</button>`;
 
   row.onclick = () => {
     if (repSel.has(e.taskId)) repSel.delete(e.taskId); else repSel.add(e.taskId);
@@ -1684,7 +1749,7 @@ function reportRow(e) {
       );
     }
     $('#rep-count').textContent = `${repSel.size} / ${repEntries.length}`;
-    $('#rep-all').textContent = repSel.size === repEntries.length ? 'Select none' : 'Select all';
+    $('#rep-all').textContent = repSel.size === repEntries.length ? tr('selectNone') : tr('selectAll');
     $('#rep-copy').disabled = !repSel.size;
     $('#rep-save').disabled = !repSel.size;
   };
@@ -1752,7 +1817,7 @@ $('#rep-all').onclick = () => {
 
 $('#rep-copy').onclick = async () => {
   const ok = await copyText(reportMarkdown());
-  toast(ok ? 'Report copied' : 'Could not copy');
+  toast(ok ? tr('reportCopied') : tr('couldNotCopy'));
 };
 
 $('#rep-save').onclick = () => {
@@ -1770,7 +1835,7 @@ $('#rep-week').onclick = e => {
   if (!weeksEl.hidden) { weeksEl.hidden = true; $('#rep-week').setAttribute('aria-expanded', 'false'); return; }
 
   weeksEl.innerHTML = '';
-  C.weeksWithActivity(state.events, C.ymd()).forEach(w => {
+  C.weeksWithActivity(state.events, C.ymd(), locale).forEach(w => {
     const b = document.createElement('button');
     b.setAttribute('aria-pressed', String(w.monday === repWeek));
     b.innerHTML = `${w.label}<span class="c">${w.count || '—'}</span>`;

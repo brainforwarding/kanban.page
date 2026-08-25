@@ -1079,6 +1079,17 @@ kbd {
 }
 .update-notice button:hover { filter: brightness(.96); }
 
+.menu-label {
+  padding: 8px 10px 5px;
+  color: var(--faint);
+  font: 500 10px/1 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  user-select: none;
+}
+.locale-check { opacity: 0; color: var(--accent); font-size: 14px; }
+#languageChoices button[aria-checked="true"] .locale-check { opacity: 1; }
+
 /* ── weekly report ─────────────────────────────────────── */
 
 .sheet.wide {
@@ -1241,6 +1252,8 @@ button[disabled] { opacity: .4; pointer-events: none; }
   .search:focus-within { width: 160px; }
   .board { gap: 10px; padding: 14px 10px 16px; }
   .update-notice { right: 10px; bottom: 10px; }
+  .menu { right: 10px; max-width: calc(100vw - 20px); max-height: calc(100dvh - 64px); overflow-y: auto; }
+  .menu > button, #languageChoices button { min-height: 40px; }
   .col { width: min(84vw, var(--col-w)); }
   .sheet { top: auto; bottom: 0; border-radius: 16px 16px 0 0; width: 100vw; }
   @keyframes sheetIn {

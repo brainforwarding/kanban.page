@@ -33,7 +33,9 @@ const BoardCore = (() => {
     return (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
   }
 
-  const weekdayName = day => DAYS[weekdayIndex(day)];
+  const weekdayName = (day, locale = 'en') => locale === 'es'
+    ? ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'][weekdayIndex(day)]
+    : DAYS[weekdayIndex(day)];
   const mondayOf = day => addDays(day, -weekdayIndex(day));
 
   function weekRange(monday) {
@@ -43,17 +45,18 @@ const BoardCore = (() => {
   }
 
   /** "9–15 Mar 2026" · "30 Mar – 5 Apr 2026" · "29 Dec 2025 – 4 Jan 2026" */
-  function weekLabel(monday) {
+  function weekLabel(monday, locale = 'en') {
     const a = monday.split('-').map(Number);
     const b = addDays(monday, 6).split('-').map(Number);
     const [ay, am, ad] = a, [by, bm, bd] = b;
-    if (ay !== by) return `${ad} ${MONTHS[am - 1]} ${ay} – ${bd} ${MONTHS[bm - 1]} ${by}`;
-    if (am !== bm) return `${ad} ${MONTHS[am - 1]} – ${bd} ${MONTHS[bm - 1]} ${by}`;
-    return `${ad}–${bd} ${MONTHS[am - 1]} ${ay}`;
+    const months = locale === 'es' ? ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sept', 'oct', 'nov', 'dic'] : MONTHS;
+    if (ay !== by) return `${ad} ${months[am - 1]} ${ay} – ${bd} ${months[bm - 1]} ${by}`;
+    if (am !== bm) return `${ad} ${months[am - 1]} – ${bd} ${months[bm - 1]} ${by}`;
+    return `${ad}–${bd} ${months[am - 1]} ${ay}`;
   }
 
   /** "MON 9" — the stamp on a report row. The week label carries the month. */
-  const dayLabel = day => `${weekdayName(day)} ${Number(day.split('-')[2])}`;
+  const dayLabel = (day, locale = 'en') => `${weekdayName(day, locale)} ${Number(day.split('-')[2])}`;
 
   const contains = (monday, day) => day >= monday && day <= addDays(monday, 6);
 
@@ -63,7 +66,7 @@ const BoardCore = (() => {
    * Every week from the first one with activity through today — quiet weeks
    * included, so "any week" really is selectable and a gap looks like a gap.
    */
-  function weeksWithActivity(events, todayYmd) {
+  function weeksWithActivity(events, todayYmd, locale = 'en') {
     const counts = new Map();
     for (const e of events || []) {
       const m = mondayOf(e.day);
@@ -79,7 +82,7 @@ const BoardCore = (() => {
     const last = keys[keys.length - 1];
     const out = [];
     for (let m = keys[0]; m <= last; m = addDays(m, 7)) {
-      out.push({ monday: m, count: counts.get(m) || 0, label: weekLabel(m) });
+      out.push({ monday: m, count: counts.get(m) || 0, label: weekLabel(m, locale) });
     }
     return out.reverse();
   }
@@ -308,13 +311,13 @@ const BoardCore = (() => {
 
   /* ── storage ─────────────────────────────────────────── */
 
-  function defaultBoard() {
+  function defaultBoard(locale = 'en') {
     return {
       v: 2,
       theme: 'light',
       density: 'comfortable',
       asOf: null,
-      columns: ['Inbox', 'Doing', 'Waiting', 'Done'].map(name => ({ id: uid(), name })),
+      columns: (locale === 'es' ? ['Bandeja', 'En curso', 'En espera', 'Hecho'] : ['Inbox', 'Doing', 'Waiting', 'Done']).map(name => ({ id: uid(), name })),
       projects: [],
       tasks: [],
       events: [],
