@@ -700,11 +700,19 @@ board.addEventListener('pointerdown', e => {
   if (!card || e.target.closest('.chip') || e.target.closest('.flag')) return;
 
   const sx = e.clientX, sy = e.clientY;
+  // A mouse has a spare gesture — the pointer is already somewhere before it
+  // presses — so movement can mean "drag". A finger has only one, and the
+  // scrollers need it: the column pans vertically and the board pages sideways.
+  // So on touch a card is lifted by holding still, and any movement before the
+  // hold hands the gesture back to the browser. Same 5px constant, opposite
+  // polarity: on a mouse it ARMS the drag, on a finger it disarms it.
+  const touch = e.pointerType === 'touch';
   let started = false;
 
   const move = ev => {
     if (!started) {
-      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < (touch ? 8 : 5)) return;
+      if (touch) { off(); return; }        // it was a scroll, not a grab
       started = true;
       beginDrag(card, sx, sy);
     }
@@ -712,7 +720,16 @@ board.addEventListener('pointerdown', e => {
     moveDrag(ev);
   };
 
+  // Once the hold has lifted a card the finger must stop panning. Legal because
+  // the browser cannot already have started a scroll during a stationary hold,
+  // and preventDefault only works while the touchmove is still cancelable.
+  const block = ev => { if (started) ev.preventDefault(); };
+  const held = touch ? setTimeout(() => { started = true; beginDrag(card, sx, sy); }, 320) : 0;
+  if (touch) document.addEventListener('touchmove', block, { passive: false });
+
   const off = () => {
+    clearTimeout(held);
+    document.removeEventListener('touchmove', block);
     document.removeEventListener('pointermove', move);
     document.removeEventListener('pointerup', up);
     document.removeEventListener('pointercancel', cancel);
@@ -841,6 +858,10 @@ function dragFrame(now) {
 function endDrag() {
   if (!drag) return;
   cancelAnimationFrame(dragRAF);
+  // The last board mutation with neither an event nor an undo — and the one a
+  // mis-read swipe used to produce. A cross-stage move is in the log; a
+  // reorder inside a column is not, so without this it cannot be taken back.
+  snapshot();
 
   const { wrap, ghost } = drag;
   const movedId = drag.card.dataset.id;

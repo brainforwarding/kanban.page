@@ -1332,6 +1332,17 @@ button[disabled] { opacity: .4; pointer-events: none; }
    ".pill.add", ".pill.flagpill", ".icon.sm" and
    "[data-density=compact] .chip" are the other (0,2,0) rules that bite. */
 
+/* ── input: coarse pointer ─────────────────────────────── */
+@media (pointer: coarse) {
+  /* touch-action: none on a card meant a swipe that began on one neither
+     scrolled nor paged — and cards cover ~90% of a column, so a column taller
+     than the screen was unreachable. Hand both axes back to the browser; the
+     app takes the gesture only after a hold (see the pointerdown handler). */
+  .card { touch-action: pan-x pan-y; }
+}
+
+/* ── input: no hover ───────────────────────────────────── */
+
 /* ── space ─────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .rail { gap: 10px; padding: 0 10px; }
