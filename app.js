@@ -712,15 +712,23 @@ board.addEventListener('pointerdown', e => {
     moveDrag(ev);
   };
 
-  const up = () => {
+  const off = () => {
     document.removeEventListener('pointermove', move);
     document.removeEventListener('pointerup', up);
-    if (started) endDrag();
-    else openEditor(card.dataset.id);
+    document.removeEventListener('pointercancel', cancel);
   };
+  const up = () => { off(); if (started) endDrag(); else openEditor(card.dataset.id); };
+  // The browser fires pointercancel INSTEAD of pointerup the moment it claims
+  // the gesture for itself — a touch scroll, a system edge-swipe, a second
+  // finger. Without this the ghost stays on screen and body keeps cursor
+  // 'grabbing' and user-select 'none' for the rest of the session; not even
+  // closing the panel clears it. A cancel is not a tap, so it never opens
+  // the editor the way pointerup does.
+  const cancel = () => { off(); if (started) endDrag(); };
 
   document.addEventListener('pointermove', move);
   document.addEventListener('pointerup', up);
+  document.addEventListener('pointercancel', cancel);
 });
 
 function beginDrag(card, sx, sy) {
@@ -1004,6 +1012,7 @@ function dragColumn(ev, srcCol) {
   const up = () => {
     document.removeEventListener('pointermove', move);
     document.removeEventListener('pointerup', up);
+    document.removeEventListener('pointercancel', up);   // see the card drag
     cancelAnimationFrame(raf);
     board.classList.remove('dragging');
     document.body.style.cursor = '';
@@ -1011,6 +1020,9 @@ function dragColumn(ev, srcCol) {
 
     const order = cols().map(x => x.dataset.id);
     const was = state.columns.map(x => x.id).join();
+    // snapshot before the mutation, and only when it is a real move: stage
+    // order decides which stage is done, so a reorder must be undoable.
+    if (order.join() !== was) snapshot();
     state.columns.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
     if (state.columns.map(x => x.id).join() !== was) save();
 
@@ -1037,6 +1049,7 @@ function dragColumn(ev, srcCol) {
 
   document.addEventListener('pointermove', move);
   document.addEventListener('pointerup', up);
+  document.addEventListener('pointercancel', up);
 }
 
 /* ── editor ────────────────────────────────────────────── */
@@ -1342,12 +1355,16 @@ function dragProjectRow(ev, srcRow) {
   const up = () => {
     document.removeEventListener('pointermove', move);
     document.removeEventListener('pointerup', up);
+    document.removeEventListener('pointercancel', up);   // see the card drag
     cancelAnimationFrame(raf);
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
 
     const order = [...list.querySelectorAll('.prow')].map(x => x.dataset.id);
     const before = state.projects.map(x => x.id).join();
+    // project order drives the filter chips, the report grouping and the
+    // export, so a reorder must be undoable like every other change
+    if (order.join() !== before) snapshot();
     state.projects.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
     if (state.projects.map(x => x.id).join() !== before) { save(); render(); }
 
@@ -1374,6 +1391,7 @@ function dragProjectRow(ev, srcRow) {
 
   document.addEventListener('pointermove', move);
   document.addEventListener('pointerup', up);
+  document.addEventListener('pointercancel', up);
 }
 
 $('#proj-add').addEventListener('submit', e => {
