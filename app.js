@@ -1694,10 +1694,28 @@ function hideToast() {
 /* ── scrim + keys ──────────────────────────────────────── */
 
 function syncScrim() {
+  const was = scrim.hidden;
   scrim.hidden = editor.hidden && panel.hidden && reportEl.hidden && archiveEl.hidden;
+  // A scrim that has just appeared has not been pressed yet. See below.
+  if (was && !scrim.hidden) scrimPressed = false;
 }
 
-scrim.onclick = () => { closeEditor(); closeProjects(); closeReport(); closeArchive(); };
+/* A tap dispatches pointerup and THEN a compatibility click, and the click is
+   hit-tested fresh — by which time opening the editor has already raised the
+   scrim under the finger. So the very gesture that opened a panel landed here
+   and closed it again, and on a phone a card could not be opened at all:
+   editorOpen was false 60ms and 560ms after a real touch tap, while the same
+   gesture with a mouse opened it fine (a mouse click targets the down/up
+   common ancestor, not a fresh hit test).
+   Closing stays on click, so the desktop feel is unchanged — it just has to be
+   a click whose press also landed on the scrim. */
+let scrimPressed = false;
+scrim.addEventListener('pointerdown', () => { scrimPressed = true; });
+scrim.onclick = () => {
+  if (!scrimPressed) return;
+  scrimPressed = false;
+  closeEditor(); closeProjects(); closeReport(); closeArchive();
+};
 
 qInput.addEventListener('input', () => {
   query = qInput.value.trim().toLowerCase();
