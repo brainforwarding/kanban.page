@@ -386,10 +386,18 @@ function renderBoard() {
         <span class="col-name" contenteditable="plaintext-only" spellcheck="false">${esc(col.name)}</span>
         <span class="col-count">${items.length}</span>
         <span class="grow"></span>
+        <button class="grab" title="${tr('reorder')}">${ICON.grip}</button>
         <button class="icon sm" data-add title="${tr('newTask')}">${ICON.plus}</button>
         ${total === 0 && state.columns.length > 1 ? `<button class="icon sm" data-del title="${tr('delete')} ${tr('task')}">${ICON.close}</button>` : ''}
       </div>
       <div class="col-body"></div>`;
+
+    // Two ways in, one code path: the handle, and any bare part of the head.
+    // People try to drag a column by its header before they look for a grip.
+    $('.col-head', el).onpointerdown = ev => {
+      if (ev.target.closest('.col-name') || ev.target.closest('button:not(.grab)')) return;
+      dragColumn(ev, el);
+    };
 
     const body = $('.col-body', el);
     if (composerCol === col.id) body.append(composerEl(col.id));
@@ -905,6 +913,132 @@ function deleteColumn(id) {
   toast(tr('stageDeleted'), undo);
 }
 
+/** Columns reorder the way project rows do — same ghost, same FLIP, sideways.
+    This exists because a new stage always lands on the right (addColumn pushes),
+    and without a way to move it left the only workaround was to rename stages
+    into each other's places. That quietly rewrites what "done" means: the report
+    reads the LAST column as done, and the event log keeps the old names forever. */
+function dragColumn(ev, srcCol) {
+  if (ev.button !== 0) return;
+  ev.preventDefault();
+  const id = srcCol.dataset.id;
+  const col = board.querySelector(`.col[data-id="${id}"]`);
+  if (!col) return;
+
+  // The trailing "add stage" affordance is also a .col — never a drop target,
+  // and never the element we append past.
+  const cols = () => [...board.querySelectorAll('.col:not(.ghost-col)')];
+  const tail = board.querySelector('.ghost-col');
+
+  const r = col.getBoundingClientRect();
+  const wrap = document.createElement('div');
+  wrap.className = 'col-ghost-wrap';
+  const ghost = col.cloneNode(true);
+  ghost.classList.add('col-ghost');
+  ghost.style.width = r.width + 'px';
+  ghost.style.height = r.height + 'px';
+  wrap.append(ghost);
+  wrap.style.transform = `translate3d(${r.left}px, ${r.top}px, 0)`;
+  wrap.style.transformOrigin = `${ev.clientX - r.left}px ${ev.clientY - r.top}px`;
+  document.body.append(wrap);
+  void ghost.offsetWidth; // flush layout so the lift has a value to transition from
+  ghost.classList.add('lift');
+
+  col.style.flex = `0 0 ${r.width}px`;   // hold the slot open at its real width
+  col.classList.add('drag-src');
+  board.classList.add('dragging');
+  document.body.style.cursor = 'grabbing';
+  document.body.style.userSelect = 'none';
+
+  const ox = ev.clientX - r.left;
+  let lastX = ev.clientX, px = ev.clientX, vx = 0, raf = null;
+
+  const place = () => {
+    const tilt = Math.max(-2.5, Math.min(2.5, vx * 0.2));
+    wrap.style.transform =
+      `translate3d(${lastX - ox}px, ${r.top}px, 0) rotate(${tilt.toFixed(2)}deg)`;
+  };
+
+  const retarget = x => {
+    const others = cols().filter(c => c !== col);
+    const next = others.find(o => {
+      const b = o.getBoundingClientRect();
+      return x < b.left + b.width / 2;
+    });
+    const same = next ? col.nextElementSibling === next : others[others.length - 1] === col.previousElementSibling;
+    if (same) return;
+    const before = new Map(others.map(o => [o.dataset.id, o.getBoundingClientRect().left]));
+    board.insertBefore(col, next || tail);
+    if (stillMotion.matches) return;
+    others.forEach(o => {
+      const dx = before.get(o.dataset.id) - o.getBoundingClientRect().left;
+      if (dx) o.animate([{ transform: `translateX(${dx}px)` }, { transform: 'none' }],
+        { duration: 190, easing: EASE });
+    });
+  };
+
+  const move = e => {
+    vx = vx * 0.8 + (e.clientX - px) * 0.2;
+    px = e.clientX;
+    lastX = e.clientX;
+    place();
+    retarget(e.clientX);
+  };
+
+  // Settle the tilt and edge-scroll the board even while the pointer is still.
+  const frame = () => {
+    if (Math.abs(vx) > 0.05) { vx *= 0.86; place(); }
+    const br = board.getBoundingClientRect();
+    const zone = 64;
+    if (lastX - br.left < zone) {
+      board.scrollLeft -= 12 * (1 - (lastX - br.left) / zone);
+      retarget(lastX);
+    } else if (br.right - lastX < zone) {
+      board.scrollLeft += 12 * (1 - (br.right - lastX) / zone);
+      retarget(lastX);
+    }
+    raf = requestAnimationFrame(frame);
+  };
+  raf = requestAnimationFrame(frame);
+
+  const up = () => {
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    cancelAnimationFrame(raf);
+    board.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+
+    const order = cols().map(x => x.dataset.id);
+    const was = state.columns.map(x => x.id).join();
+    state.columns.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    if (state.columns.map(x => x.id).join() !== was) save();
+
+    // render() rebuilds the board, so the element we dragged is gone after this;
+    // the ghost flies to wherever the freshly rendered column actually landed.
+    render();
+    const landed = board.querySelector(`.col[data-id="${id}"]`);
+
+    let settled = false;
+    const settle = () => { if (settled) return; settled = true; wrap.remove(); };
+    if (stillMotion.matches || !landed) { settle(); return; }
+
+    const target = landed.getBoundingClientRect();
+    ghost.classList.remove('lift');
+    const flight = wrap.animate(
+      [{ transform: wrap.style.transform },
+       { transform: `translate3d(${target.left}px, ${target.top}px, 0) rotate(0deg)` }],
+      { duration: 180, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'forwards' }
+    );
+    flight.finished.then(settle).catch(settle);
+    // animations pause in a backgrounded tab — never leave a ghost stuck
+    setTimeout(settle, 500);
+  };
+
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+}
+
 /* ── editor ────────────────────────────────────────────── */
 
 const fTitle = $('#f-title');
@@ -1087,7 +1221,7 @@ function renderProjects() {
     if (openSwatch === p.id) {
       row.classList.add('picking');
       row.innerHTML = `
-        <button class="grab" title="Drag to reorder">${ICON.grip}</button>
+        <button class="grab" title="${tr('reorder')}">${ICON.grip}</button>
         <div class="palette">${COLORS.map((c, i) =>
           `<button style="--c:${c}" aria-pressed="${c === p.color}" title="${COLOR_NAMES[i]}"></button>`).join('')}</div>`;
 
@@ -1098,7 +1232,7 @@ function renderProjects() {
       });
     } else {
       row.innerHTML = `
-        <button class="grab" title="Drag to reorder">${ICON.grip}</button>
+        <button class="grab" title="${tr('reorder')}">${ICON.grip}</button>
         <button class="swatch" title="Change color"></button>
         <input value="${esc(p.name)}" spellcheck="false">
         <span class="n">${n}</span>

@@ -100,7 +100,7 @@ Weeks run Monday–Sunday. On Monday morning the report opens on the week that j
 | `F` | flag / unflag the focused card |
 | `⌥` + arrows | move the focused card between stages or up and down |
 
-Stage names are editable in place — click one and type. Stages can be added and removed; a stage can only be deleted once it's empty.
+Stage names are editable in place — click one and type. Stages can be added and removed; a stage can only be deleted once it's empty. Drag a stage by its header (or the grip that appears on hover) to move it. Order matters: the **rightmost stage is the done stage**, which is what the weekly report counts as finished — so put a new stage where it belongs rather than renaming stages to fake a position.
 
 ## Scope, honestly
 
@@ -119,7 +119,7 @@ node --test tests/core.test.js     # 54 unit tests, no dependencies
 
 They cover the parts that are easy to get silently wrong: calendar dates across DST, Monday–Sunday week boundaries across month and year ends, report aggregation, markdown output, re-dating guards, and storage migration.
 
-Then open `tests/dom.test.html` in Chrome for 25 interaction tests — they drive the real app in an iframe (drag a card, chain the composer, generate a report, undo) and report pass/fail in the page title, against a `?ns=test` board that never touches your data.
+Then open `tests/dom.test.html` in Chrome for 27 interaction tests — they drive the real app in an iframe (drag a card, chain the composer, generate a report, undo) and report pass/fail in the page title, against a `?ns=test` board that never touches your data.
 
 ## Files
 

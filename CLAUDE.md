@@ -57,9 +57,7 @@ The report modal shows every card created or moved that week, with routes and pe
 - **Closing the quick composer = saving.** `closeComposer()` commits any typed text as a card; only Esc (`{ discard: true }`) throws a draft away.
 - **Damaged boards keep their event log** — the log is the only copy of the history (see migration tests).
 
-### Drag pattern (cards and project rows share it)
-
-Pointer listeners on `document` (no pointer capture — synthetic test events depend on this), a fixed-position ghost clone that follows the pointer with velocity-based tilt, FLIP animation for displaced siblings, and a ghost "flight" to the resting rect on drop. `prefers-reduced-motion` collapses all of it.
+### Drag pattern (cards, stages, and project rows share it)
 
 ### Design voice
 

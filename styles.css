@@ -287,7 +287,49 @@ kbd {
   height: 30px;
   padding: 0 6px 0 4px;
   flex: none;
+  cursor: grab;                /* the whole head drags… */
 }
+.col-head .col-name { cursor: text; }   /* …except the part you type in */
+
+.col .grab {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--faint);
+  cursor: grab;
+  touch-action: none;          /* the handle drags the column, never the page */
+  opacity: 0;
+  transition: opacity .16s;
+}
+.col .grab svg { width: 14px; height: 14px; }
+.col:hover .grab { opacity: 1; }
+
+/* the slot a lifted column leaves behind, same language as a dragged card */
+.col.drag-src {
+  background: color-mix(in srgb, var(--raise-hi) 55%, transparent);
+  border-radius: var(--r);
+}
+.col.drag-src > * { opacity: 0; }
+
+.col-ghost-wrap {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 300;
+  pointer-events: none;
+  will-change: transform;
+}
+.col-ghost {
+  background: var(--surface);
+  border: 1px solid var(--line-hi);
+  border-radius: var(--r);
+  box-shadow: var(--sh-drag);
+  padding: 0 4px;
+  transition: transform .14s var(--ease), box-shadow .18s;
+  cursor: grabbing;
+}
+.col-ghost.lift { transform: scale(1.01); }
+.col-ghost .grab { opacity: 1; cursor: grabbing; }
 
 .col-name {
   font: 500 10.5px/1 var(--mono);

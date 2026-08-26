@@ -469,6 +469,42 @@ frame.addEventListener('load', async function run() {
     eq(JSON.stringify(after), JSON.stringify(before), 'history untouched');
   });
 
+  await test('a stage can be dragged to another position, and the order sticks', async () => {
+    const names = () => [...D.querySelectorAll('.col:not(.ghost-col) .col-name')].map(n => n.textContent);
+    const start = names();
+    assert(start.length === 4, `four stages to reorder; got ${start.join(',')}`);
+
+    const cols = () => [...D.querySelectorAll('.col:not(.ghost-col)')];
+    const handle = cols()[3].querySelector('.grab');
+    assert(handle, 'every stage header carries a drag handle');
+    const hr = handle.getBoundingClientRect();
+    const second = cols()[1].getBoundingClientRect();
+    const P = (type, x, y) => new W.PointerEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0, isPrimary: true });
+    handle.dispatchEvent(P('pointerdown', hr.left + 8, hr.top + 8));
+    D.dispatchEvent(P('pointermove', second.left + 40, second.top + 10));
+    D.dispatchEvent(P('pointermove', second.left + 4, second.top + 10)); // left of its midpoint
+    await sleep(20);
+    D.dispatchEvent(P('pointerup', second.left + 4, second.top + 10));
+    await sleep(700); // let the flight land and clean up
+
+    const moved = [start[0], start[3], start[1], start[2]];
+    eq(names().join(','), moved.join(','), 'the dragged stage lands where it was dropped');
+    eq(W.__board.state.columns.map(c => c.name).join(','), moved.join(','), 'state follows the drop');
+    eq(D.querySelectorAll('.col-ghost-wrap').length, 0, 'no ghost left behind');
+    await sleep(200); // save is debounced
+    eq(JSON.parse(W.localStorage.getItem('board.v2.test')).columns.map(c => c.name).join(','),
+      moved.join(','), 'persisted');
+  });
+
+  await test('reordering stages is what decides which one counts as done', async () => {
+    // The report reads the LAST stage as done — position, never a name. Being
+    // able to reorder is why nobody has to rename stages into each other's
+    // places to get a stage where they want it.
+    const cols = W.__board.state.columns;
+    eq(cols[cols.length - 1].name, D.querySelectorAll('.col:not(.ghost-col) .col-name')[cols.length - 1].textContent,
+      'the rightmost stage on screen is the one the report treats as done');
+  });
+
   /* ── done ───────────────────────────────────────────── */
 
   W.localStorage.removeItem('board.v2.test');
