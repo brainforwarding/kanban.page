@@ -191,6 +191,7 @@ kbd {
 .pill[aria-pressed="true"] .dot { transform: scale(1.25); }
 
 .pill.add { color: var(--faint); padding: 0 9px; }
+.pill.add svg { width: 13px; height: 13px; }
 .pill.add:hover { color: var(--accent); }
 
 /* the ★ filter chip — the star is always lit so the chip reads as "n flagged"
@@ -1269,10 +1270,6 @@ kbd {
 /* At phone width the title is down to a few characters. The route is the most
    redundant thing in the row once the tense heading says which side of the
    done line the card ended on. */
-@media (max-width: 640px) {
-  .rep-row .rf { display: none; }
-}
-
 .rep-row .rd {
   flex: none;
   width: 58px;
@@ -1322,6 +1319,20 @@ button[disabled] { opacity: .4; pointer-events: none; }
 
 /* ── responsive ────────────────────────────────────────── */
 
+/* ── responsive ────────────────────────────────────────────
+   Three axes, kept apart on purpose. Two are about the INPUT (is there a
+   pointer that hovers, is it a fingertip) and one is about SPACE. Mixing
+   them is how a rule meant for a phone fails to fire on a touch laptop,
+   or a sizing rule ends up keyed to a width it has nothing to do with.
+
+   One trap, true of all three blocks: a media query adds NO specificity.
+   ".sheet { top }" at (0,1,0) silently lost to ".sheet.wide" (0,2,0), and
+   the box ended up stretched between a top from one rule and a bottom from
+   the other. Any override here must match or beat its competitor —
+   ".pill.add", ".pill.flagpill", ".icon.sm" and
+   "[data-density=compact] .chip" are the other (0,2,0) rules that bite. */
+
+/* ── space ─────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .rail { gap: 10px; padding: 0 10px; }
   .brand { display: none; }
@@ -1330,9 +1341,29 @@ button[disabled] { opacity: .4; pointer-events: none; }
   .board { gap: 10px; padding: 14px 10px 16px; }
   .update-notice { right: 10px; bottom: 10px; }
   .menu { right: 10px; max-width: calc(100vw - 20px); max-height: calc(100dvh - 64px); overflow-y: auto; }
-  .menu > button, #languageChoices button { min-height: 40px; }
   .col { width: min(84vw, var(--col-w)); }
-  .sheet { top: auto; bottom: 0; border-radius: 16px 16px 0 0; width: 100vw; }
+
+  /* The route is board mechanics, and the tense heading already says which
+     side of the done line a card ended on — the most redundant thing in the
+     row, at exactly the width where the title has nothing to spare. */
+  .rep-row .rf { display: none; }
+
+  /* .wide has to be named or it wins on specificity and the sheet stretches
+     between its own top and this bottom. Flex plus a cap makes the sheet hug
+     its content and keeps the footer reachable however long the list runs. */
+  .sheet, .sheet.wide {
+    top: auto;
+    bottom: 0;
+    width: 100vw;
+    max-height: 92dvh;
+    display: flex;
+    flex-direction: column;
+    border-radius: 16px 16px 0 0;
+  }
+  /* shrink, never grow: a two-row report is not a full-height sheet */
+  .sheet .rep-body, .sheet .sheet-body { flex: 0 1 auto; min-height: 0; }
+  .sheet .rep-body { max-height: none; overflow-y: auto; }
+
   @keyframes sheetIn {
     from { opacity: 0; transform: translateX(-50%) translateY(18px) }
     to   { opacity: 1; transform: translateX(-50%) }
