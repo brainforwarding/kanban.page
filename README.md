@@ -59,7 +59,7 @@ The board is happiest as its own window, pinned to your dock or taskbar:
 - **Projects with color.** Filter chips across the top, a color-coded edge on every card. Drag projects to reorder them — that order carries into the report, the export, and **⋯ → Sort by project**, which tidies every column into it: stable within a project, unassigned cards last, one Undo away.
 - **Flag what matters.** Hover a card and star it (or press `F` on a focused card). While anything is flagged, a ★ chip beside **All** counts them — a category of its own: press it and the board shows just the flagged cards, across all projects. Flags are planning state, not history — they never touch the weekly report or the age stamp.
 - **Two densities.** **⋯ → Compact cards** (or `D`) fits more of the board on screen: tighter padding and type, notes clamp to one line, and columns stretch to use the whole window — long titles stop wrapping, so cards get shorter. On a crowded board columns narrow instead. Every card glides to its new place; the choice is remembered.
-- **A weekly report your team can actually read.** One key (`R`) shows everything created or moved that week, Monday to Sunday. Tick what belongs, export clean Markdown — only finished work, grouped by project, title only.
+- **A weekly report your team can actually read.** One key (`R`) shows everything created or moved that week, Monday to Sunday, split into what you shipped and what is still in flight. Finished work arrives ticked; tick anything else you want to mention. The export is exactly what is ticked — clean Markdown, title only.
 - **Made for terminal-agent workflows.** Every card can hold the resume command your coding agent printed (`claude --resume …`, `codex resume …`). Click it on the card and it's on your clipboard; copy one from a terminal and **paste it onto the board** to start a card with the session attached.
 - **Nothing is one click from gone.** The board archives; only the archive deletes, behind a two-step confirm. Deleting a project or clearing cards never damages past weekly reports.
 
@@ -69,18 +69,22 @@ The board is happiest as its own window, pinned to your dock or taskbar:
 
 `R` opens the week — every card **created** or **moved to another stage**, grouped by project, with the route it took and an editable day stamp (move a row to another day and it hops to that week's report). Untick anything; the export is whatever is ticked.
 
-The exported Markdown is deliberately narrower than the view: only ticked cards that **ended the week in the done stage**, grouped by project, title only — no routes, no counts, and cards without a project stay out. It reads like a changelog, not a log file:
+The exported Markdown is deliberately narrower than the view: title only, no routes, no counts. It is grouped by **tense** — did the card end the week in the last stage, or not — with the project as a suffix, in your project order:
 
 ```markdown
 # Progress — 10–16 Aug 2026
 
-## Website
-- Onboarding tour v2
+## Shipped
+- Onboarding tour v2 · Website
+- Rate limiting for the public API · API
 
-## API
-- Rate limiting for the public API
-- Invoice PDF export
+## In flight
+- Invoice PDF export · API
 ```
+
+Finished work under a project arrives ticked, so the default export is exactly what it has always been: what you shipped. Everything else that moved is listed underneath, unticked — tick it and it joins the file under **In flight**. A section with nothing ticked prints no heading, so a quiet week never files an empty one. The count in the footer is always what the file will contain.
+
+Which stage counts as "done" is **position, not a name**: the rightmost one. That is why stages can be dragged — put a new stage where it belongs rather than renaming stages to fake a position.
 
 Weeks run Monday–Sunday. On Monday morning the report opens on the week that just ended, ready to send.
 
@@ -114,12 +118,12 @@ Practical notes:
 ## Tests
 
 ```bash
-node --test tests/core.test.js     # 54 unit tests, no dependencies
+node --test tests/core.test.js     # 65 unit tests, no dependencies
 ```
 
 They cover the parts that are easy to get silently wrong: calendar dates across DST, Monday–Sunday week boundaries across month and year ends, report aggregation, markdown output, re-dating guards, and storage migration.
 
-Then open `tests/dom.test.html` in Chrome for 27 interaction tests — they drive the real app in an iframe (drag a card, chain the composer, generate a report, undo) and report pass/fail in the page title, against a `?ns=test` board that never touches your data.
+Then open `tests/dom.test.html` in Chrome for 29 interaction tests — they drive the real app in an iframe (drag a card, chain the composer, generate a report, undo) and report pass/fail in the page title, against a `?ns=test` board that never touches your data.
 
 ## Files
 

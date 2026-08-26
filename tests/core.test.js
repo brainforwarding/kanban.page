@@ -172,7 +172,7 @@ test('a card created this week is never netZero, even if it ends where it starte
   const [e] = C.aggregateWeek(events, '2026-03-09', look({ t1: 'A' }));
   assert.equal(e.created, true);
   assert.equal(e.netZero, false);
-  assert.equal(e.include, true);
+  assert.equal(e.include, false); // real work, but unfinished and unassigned — listed, not pre-ticked
 });
 
 test('only the selected week is aggregated', () => {
@@ -246,7 +246,7 @@ function rows() {
     { id: '4', taskId: 't3', title: 'Buy domain', type: 'created', from: null, to: 'Done', at: 4, day: '2026-03-12' },
   ];
   const meta = { t1: ['Fix webhook retries', 'crm'], t2: ['Refactor auth', 'crm'], t3: ['Buy domain', null] };
-  return C.aggregateWeek(events, week, id => (meta[id] ? { title: meta[id][0], project: meta[id][1] } : null));
+  return C.aggregateWeek(events, week, id => (meta[id] ? { title: meta[id][0], project: meta[id][1] } : null), 'Done');
 }
 
 test('groupByProject keeps project order and puts unassigned last', () => {
@@ -255,13 +255,13 @@ test('groupByProject keeps project order and puts unassigned last', () => {
   assert.equal(groups[0].entries.length, 2);
 });
 
-test('toMarkdown lists finished cards under their projects, nothing else', () => {
-  const md = C.toMarkdown(rows(), week, { projectOrder: ['crm'], doneStage: 'Done' });
+test('toMarkdown lists exactly the entries it is handed, nothing else', () => {
+  const md = C.toMarkdown(rows().filter(r => r.include), week, { projectOrder: ['crm'] });
   assert.equal(md, [
     '# Progress — 9–15 Mar 2026',
     '',
-    '## crm',
-    '- Fix webhook retries',
+    '## Shipped',
+    '- Fix webhook retries · crm',
     '',
   ].join('\n')); // no summary line, no route, and 'Buy domain' (no project) stays out
 });
@@ -273,18 +273,22 @@ test('toMarkdown reports only the entries handed to it (partial export)', () => 
   assert.ok(!md.includes('Refactor auth'));
 });
 
-test('a week where only unassigned work finished reads as nothing finished', () => {
-  const partial = rows().filter(r => r.taskId === 't3'); // Buy domain, no project
-  const md = C.toMarkdown(partial, week, { projectOrder: [], doneStage: 'Done' });
-  assert.ok(md.includes('Nothing finished'));
-  assert.ok(!md.includes('Buy domain'));
+test('finished-but-unassigned work is listed, unticked, and exports if you tick it', () => {
+  const [buy] = rows().filter(r => r.taskId === 't3'); // Buy domain, Done, no project
+  assert.equal(buy.include, false);                    // never in the default export
+  const md = C.toMarkdown([buy], week, { projectOrder: [] });
+  assert.ok(md.includes('## Shipped'), md);            // but the tick is the last word
+  assert.ok(md.includes('- Buy domain'), md);
+  assert.ok(!md.includes('Buy domain ·'), md);         // no project, so no suffix
 });
 
-test('a week with activity but nothing finished says so', () => {
-  const partial = rows().filter(r => r.taskId === 't2'); // Inbox → Doing, never Done
-  const md = C.toMarkdown(partial, week, { projectOrder: ['crm'], doneStage: 'Done' });
-  assert.ok(md.includes('Nothing finished'));
-  assert.ok(!md.includes('Refactor auth'));
+test('unfinished work is listed, unticked, and exports if you tick it', () => {
+  const [refactor] = rows().filter(r => r.taskId === 't2'); // Inbox → Doing, never Done
+  assert.equal(refactor.include, false);
+  const md = C.toMarkdown([refactor], week, { projectOrder: ['crm'] });
+  assert.ok(md.includes('## In flight'), md);
+  assert.ok(md.includes('- Refactor auth · crm'), md);
+  assert.ok(!md.includes('## Shipped'), md);           // an empty section prints no heading
 });
 
 test('an empty week still produces a valid, honest file', () => {
@@ -297,6 +301,106 @@ test('markdown escapes nothing it should not, and keeps titles verbatim', () => 
   const entries = [{ taskId: 'x', title: 'Fix *glob* handling in `src/**`', from: 'Inbox', to: 'Done', project: 'infra', created: false, netZero: false, include: true, day: week }];
   const md = C.toMarkdown(entries, week, { projectOrder: [], doneStage: 'Done' });
   assert.ok(md.includes('- Fix *glob* handling in `src/**`'));
+});
+
+test('a week of movement with nothing finished pre-ticks nothing at all', () => {
+  // The defect: three cards moved Inbox → Doing, the footer read "3 / 3",
+  // Copy was enabled, and the clipboard said "Nothing finished."
+  const ev = (id, title, day) => ({ id: 'e' + id, taskId: id, title, project: 'crm', type: 'moved', from: 'Inbox', to: 'Doing', at: 1, day });
+  const events = [ev('a', 'Rework onboarding', '2026-03-10'), ev('b', 'Migrate billing', '2026-03-11'), ev('c', 'Debug prod', '2026-03-12')];
+  const listed = C.aggregateWeek(events, week, id => ({ title: id, project: 'crm' }), 'Done');
+  assert.equal(listed.length, 3);                             // all three still listed
+  assert.equal(listed.filter(r => r.include).length, 0);      // none announced by default
+});
+
+test('the count the modal shows is the count the export contains', () => {
+  const ticked = rows().filter(r => r.include);
+  const md = C.toMarkdown(ticked, week, { projectOrder: ['crm'] });
+  assert.equal(md.split('\n').filter(l => l.startsWith('- ')).length, ticked.length);
+});
+
+test('both tenses get their own heading, Shipped always first', () => {
+  const md = C.toMarkdown(rows(), week, { projectOrder: ['crm'] });
+  assert.ok(md.indexOf('## Shipped') < md.indexOf('## In flight'), md);
+  assert.ok(md.includes('- Fix webhook retries · crm'), md);   // ended in Done
+  assert.ok(md.includes('- Refactor auth · crm'), md);         // ended in Doing
+});
+
+test('a card that reached done and was pulled back out is In flight', () => {
+  const events = [
+    { id: 'e1', taskId: 't1', title: 'A', project: 'crm', type: 'moved', from: 'Doing', to: 'Done', at: 1, day: '2026-03-10' },
+    { id: 'e2', taskId: 't1', title: 'A', project: 'crm', type: 'moved', from: 'Done', to: 'Doing', at: 2, day: '2026-03-12' },
+  ];
+  const [e] = C.aggregateWeek(events, week, () => ({ title: 'A', project: 'crm' }), 'Done');
+  assert.equal(e.tense, 'inflight');   // it did not END the week done
+  assert.equal(e.include, false);
+});
+
+test('a round trip takes its tense from where it ended, like everything else', () => {
+  const back = [
+    { id: 'e1', taskId: 't1', title: 'A', project: 'crm', type: 'moved', from: 'Doing', to: 'Done', at: 1, day: '2026-03-10' },
+    { id: 'e2', taskId: 't1', title: 'A', project: 'crm', type: 'moved', from: 'Done', to: 'Doing', at: 2, day: '2026-03-11' },
+    { id: 'e3', taskId: 't1', title: 'A', project: 'crm', type: 'moved', from: 'Doing', to: 'Done', at: 3, day: '2026-03-12' },
+  ];
+  const [e] = C.aggregateWeek(back, week, () => ({ title: 'A', project: 'crm' }), 'Done');
+  assert.equal(e.netZero, false);      // Doing → … → Done is real movement
+  assert.equal(e.tense, 'shipped');
+});
+
+test('project order drives the order inside a section', () => {
+  const ev = (id, proj, day) => ({ id: 'e' + id, taskId: id, title: id, project: proj, type: 'moved', from: 'Doing', to: 'Done', at: 1, day });
+  const events = [ev('a', 'zeta', '2026-03-10'), ev('b', 'alpha', '2026-03-11')];
+  const meta = { a: 'zeta', b: 'alpha' };
+  const list = C.aggregateWeek(events, week, id => ({ title: id, project: meta[id] }), 'Done');
+  const md = C.toMarkdown(list, week, { projectOrder: ['zeta', 'alpha'] });
+  assert.ok(md.indexOf('· zeta') < md.indexOf('· alpha'), md);  // user order, not alphabetical
+});
+
+test('the headings are localised, and avoid the Spanish stage names', () => {
+  const md = C.toMarkdown(rows(), week, { projectOrder: ['crm'], locale: 'es' });
+  assert.ok(md.includes('## Entregado'), md);
+  assert.ok(md.includes('## En marcha'), md);
+  assert.ok(!md.includes('En curso'), md);   // that is the Doing column's Spanish name
+});
+
+test('an entry with no tense gets no heading at all', () => {
+  const md = C.toMarkdown([{ taskId: 'x', title: 'A', to: 'Done', project: 'crm', netZero: false, include: true, day: week }],
+    week, { projectOrder: ['crm'] });
+  assert.ok(!md.includes('##'), md);         // under-claim rather than mislabel
+  assert.ok(md.includes('- A · crm'), md);
+});
+
+test('archiving annotates a row but never moves it between tenses', () => {
+  const events = [
+    { id: 'e1', taskId: 't1', title: 'A', project: 'crm', type: 'moved', from: 'Inbox', to: 'Doing', at: 1, day: '2026-03-10' },
+  ];
+  const [e] = C.aggregateWeek(events, week, () => ({ title: 'A', project: 'crm', archived: true }), 'Done');
+  assert.equal(e.archived, true);
+  assert.equal(e.tense, 'inflight');   // classification still comes only from the log
+});
+
+test('work that was already done before the week is not shipped this week', () => {
+  // Reopened on Tuesday, re-closed on Thursday. It ends the week in Done, but it
+  // did not cross the done line this week — announcing it as Shipped would be a
+  // false claim, and Select all is one click away from making it.
+  const ev = (id, f, t, day) => ({ id: 'e' + id, taskId: 't1', title: 'Reopened bug', project: 'crm', type: 'moved', from: f, to: t, at: id, day });
+  const [e] = C.aggregateWeek([ev(1, 'Done', 'Doing', '2026-03-10'), ev(2, 'Doing', 'Done', '2026-03-12')],
+    week, () => ({ title: 'Reopened bug', project: 'crm' }), 'Done');
+  assert.equal(e.netZero, true);
+  assert.equal(e.tense, 'inflight');
+  assert.equal(e.include, false);
+  const md = C.toMarkdown([e], week, { projectOrder: ['crm'] });   // ticked anyway
+  assert.ok(!md.includes('## Shipped'), md);
+});
+
+test('without a done stage no tense is claimed, so nothing is announced', () => {
+  const events = [{ id: 'e1', taskId: 't1', title: 'A', project: 'crm', type: 'moved', from: 'Inbox', to: 'Doing', at: 1, day: '2026-03-10' }];
+  const [e] = C.aggregateWeek(events, week, () => ({ title: 'A', project: 'crm' }));
+  assert.equal(e.tense, null);       // the caller cannot say where the done line is
+  assert.equal(e.include, false);
+  const md = C.toMarkdown([e], week, { projectOrder: ['crm'] });
+  assert.ok(!md.includes('##'), md); // under-claim, never guess "Shipped"
+  assert.ok(md.includes('- A · crm'), md);
 });
 
 test('reportFilename is sortable and names the week it covers', () => {
@@ -337,16 +441,16 @@ test('rewriting an entry’s day moves every event behind it', () => {
   assert.deepEqual(events.map(e => e.day), ['2026-03-04', '2026-03-04', '2026-03-10']);
 });
 
-test('a ticked round trip never reaches the export — it did not finish', () => {
+test('a round trip is listed but never pre-ticked — it did no reportable work', () => {
   const events = [
     { id: 'e1', taskId: 't1', title: 'A', type: 'moved', from: 'Doing', to: 'Waiting', at: 1, day: '2026-03-09' },
     { id: 'e2', taskId: 't1', title: 'A', type: 'moved', from: 'Waiting', to: 'Doing', at: 2, day: '2026-03-10' },
   ];
-  const rows = C.aggregateWeek(events, '2026-03-09', look({ t1: 'A' }));
+  const rows = C.aggregateWeek(events, '2026-03-09', look({ t1: 'A' }), 'Done');
   assert.equal(rows[0].netZero, true);
-  const md = C.toMarkdown(rows, '2026-03-09', { projectOrder: [], doneStage: 'Done' });
+  assert.equal(rows[0].include, false);
+  const md = C.toMarkdown(rows.filter(r => r.include), '2026-03-09', { projectOrder: [] });
   assert.ok(!md.includes('- A'), md);
-  assert.ok(md.includes('Nothing finished'), md);
 });
 
 test('a deleted card keeps the project it was done under', () => {
@@ -355,8 +459,8 @@ test('a deleted card keeps the project it was done under', () => {
   ];
   const [e] = C.aggregateWeek(events, '2026-03-09', () => null);
   assert.equal(e.project, 'crm'); // not swept into "No project"
-  const md = C.toMarkdown([e], '2026-03-09', { projectOrder: ['crm'], doneStage: 'Done' });
-  assert.ok(md.includes('## crm'), md);
+  const md = C.toMarkdown([e], '2026-03-09', { projectOrder: ['crm'] });
+  assert.ok(md.includes('- Ship it · crm'), md);
 });
 
 test('makeEvent carries the project name for that reason', () => {

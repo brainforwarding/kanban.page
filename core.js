@@ -94,10 +94,14 @@ const BoardCore = (() => {
 
   /**
    * Fold a week's events into one row per card: where it started the week,
-   * where it ended it. `lookup(taskId)` returns { title, project } for a card
-   * that still exists, or null for one that was deleted.
+   * where it ended it. `lookup(taskId)` returns { title, project, archived }
+   * for a card that still exists, or null for one that was deleted.
+   *
+   * `doneStage` is the last column's name. It decides each row's tense and,
+   * through it, which rows arrive pre-ticked. Omit it and no row gets a tense,
+   * so nothing is pre-ticked and nothing is announced under a heading.
    */
-  function aggregateWeek(events, monday, lookup) {
+  function aggregateWeek(events, monday, lookup, doneStage) {
     const week = (events || []).filter(e => contains(monday, e.day)).sort(byDayThenAt);
     const rows = new Map();
 
@@ -137,6 +141,9 @@ const BoardCore = (() => {
       if (meta) {
         r.title = meta.title || r.snapshotTitle;
         r.project = meta.project || null;
+        // Archiving logs no event, so it can never move a card between tenses —
+        // it only annotates the row. Live state annotates; the log classifies.
+        r.archived = !!meta.archived;
       } else {
         // deleted: fall back to what the event remembers, so cleared work does
         // not silently migrate into "No project"
@@ -146,7 +153,25 @@ const BoardCore = (() => {
       }
       // A card that left a stage and came back did no reportable work.
       r.netZero = !r.created && r.from === r.to;
-      r.include = !r.netZero;
+      // Shipped means the card CROSSED the done line this week: it ended in the
+      // last column and did not start the week already there. Without the second
+      // clause, a card that was already done, got reopened and re-closed reads as
+      // shipped-this-week, which is a false claim in someone else's inbox.
+      // Positional either way — the caller passes the last column's name, and no
+      // middle stage means anything, so renaming or reordering cannot change how
+      // a week reads.
+      //
+      // No doneStage means the caller cannot say where the done line is, so no
+      // tense is claimed at all. Never guess "shipped" — toMarkdown renders an
+      // untensed row under no heading, which under-claims instead of lying.
+      r.tense = !doneStage ? null
+        : (r.to === doneStage && r.from !== doneStage) ? 'shipped'
+        : 'inflight';
+      // The export's opinion, made visible. This is the only place that decides
+      // what a report announces by default — toMarkdown has no second opinion.
+      // Everything else is still listed, unticked, one click from being
+      // included anyway: the tick is the user's, not ours.
+      r.include = !r.netZero && r.tense === 'shipped' && !!r.project;
       return r;
     });
 
@@ -204,20 +229,26 @@ const BoardCore = (() => {
       return lines.join('\n');
     }
 
-    // The export is the outward-facing report: only work that reached the done
-    // stage is announced, title only — the route a card took is board detail.
-    // Unassigned cards stay off it too; work worth reporting has a project.
-    const finished = (opts.doneStage ? entries.filter(e => e.to === opts.doneStage) : entries)
-      .filter(e => e.project);
-
-    if (!finished.length) {
-      lines.push(es ? 'No se terminó nada.' : 'Nothing finished.', '');
-      return lines.join('\n');
-    }
-
-    for (const g of groupByProject(finished, opts.projectOrder)) {
-      lines.push(`## ${g.project}`);
-      for (const e of g.entries) lines.push(`- ${e.title}`);
+    // The export is the outward-facing report: title only — the route a card
+    // took is board detail. What it announces is exactly what was ticked; the
+    // default tick lives in aggregateWeek, where the user can see and overrule
+    // it. Nothing is filtered out here, so the count the modal shows is always
+    // the count this file contains.
+    //
+    // Grouped by tense, because that is what a reader scans by; the project
+    // is a suffix. An entry with no tense gets no heading at all — a caller
+    // that forgot `doneStage` should under-claim, never file unfinished work
+    // under "Shipped" in a document that goes to someone else.
+    const HEADS = { shipped: es ? 'Entregado' : 'Shipped', inflight: es ? 'En marcha' : 'In flight' };
+    for (const tense of [null, 'shipped', 'inflight']) {
+      const section = entries.filter(e => (e.tense || null) === tense);
+      if (!section.length) continue;                       // no empty headings
+      if (tense) lines.push(`## ${HEADS[tense]}`);
+      // Project order still drives the export, now within a section.
+      for (const g of groupByProject(section, opts.projectOrder)) {
+        const suffix = g.project === NO_PROJECT ? '' : ` · ${g.project}`;
+        for (const e of g.entries) lines.push(`- ${e.title}${suffix}`);
+      }
       lines.push('');
     }
     return lines.join('\n');

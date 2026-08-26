@@ -1795,7 +1795,10 @@ function lookupTask(taskId) {
   const t = byId(taskId);
   if (!t) return null;
   const p = projectOf(t);
-  return { title: t.title, project: p ? p.name : null };
+  // byId does not filter the archive, and archiving logs no event — so a card
+  // can leave the board without the log noticing. Report it as an annotation;
+  // it must never decide which tense a row belongs to.
+  return { title: t.title, project: p ? p.name : null, archived: !!t.archivedAt };
 }
 
 const selected = () => repEntries.filter(e => repSel.has(e.taskId));
@@ -1816,7 +1819,8 @@ function goWeek(monday) {
 }
 
 function renderReport(reset) {
-  repEntries = C.aggregateWeek(state.events, repWeek, lookupTask);
+  const done = state.columns[state.columns.length - 1].name;
+  repEntries = C.aggregateWeek(state.events, repWeek, lookupTask, done);
 
   // Selections live per week, so stepping away and back does not silently
   // throw away a partial pick.
@@ -1835,7 +1839,6 @@ function renderReport(reset) {
   const thisWeek = C.mondayOf(C.ymd());
   const rel = repWeek === thisWeek ? tr('thisWeek')
     : repWeek === C.addDays(thisWeek, -7) ? tr('lastWeek') : null;
-  const done = state.columns[state.columns.length - 1].name;
   $('#rep-sum').textContent = repEntries.length
     ? [rel, C.summaryLine(repEntries, done, locale)].filter(Boolean).join(' · ')
     : (rel || '');
@@ -1847,36 +1850,56 @@ function renderReport(reset) {
     body.innerHTML = `<p class="rep-empty">${tr('nothingMoved')}</p>`;
   } else {
     const order = state.projects.map(p => p.name);
-    C.groupByProject(repEntries, order).forEach(g => {
-      const p = state.projects.find(x => x.name === g.project);
+    // Grouped by tense, exactly as the export is, so you can see which section
+    // a row will land in before deciding to tick it. Project order still sorts
+    // within a section.
+    [['shipped', tr('shipped')], ['inflight', tr('inFlight')]].forEach(([tense, label]) => {
+      const section = repEntries.filter(e => (e.tense || 'shipped') === tense);
+      if (!section.length) return;
       const head = document.createElement('div');
-      head.className = 'rep-group';
-      if (p) head.style.setProperty('--c', p.color);
-      head.innerHTML = `<span class="dot"></span>${esc(g.project)}`;
+      head.className = 'rep-tense';
+      head.textContent = label;
       body.append(head);
-      g.entries.forEach(e => body.append(reportRow(e)));
+      C.groupByProject(section, order).forEach(g => g.entries.forEach(e => body.append(reportRow(e))));
     });
   }
 
-  $('#rep-count').textContent = `${repSel.size} / ${repEntries.length}`;
-  $('#rep-all').textContent = repSel.size === repEntries.length && repEntries.length ? tr('selectNone') : tr('selectAll');
-  $('#rep-copy').disabled = !repSel.size;
-  $('#rep-save').disabled = !repSel.size;
+  syncRepFoot();
 
   const { first, last } = weekBounds();
   $('#rep-prev').disabled = repWeek <= first;
   $('#rep-next').disabled = repWeek >= last;
 }
 
+/** The footer is the promise: this count is what Copy will hand you. */
+function syncRepFoot() {
+  const n = repSel.size;
+  $('#rep-count').textContent = n || !repEntries.length
+    ? `${n} / ${repEntries.length}`
+    : `${n} / ${repEntries.length} · ${tr('tickToExport')}`;
+  $('#rep-all').textContent = n === repEntries.length && repEntries.length ? tr('selectNone') : tr('selectAll');
+  const exportable = n > 0 || !repEntries.length;
+  $('#rep-copy').disabled = !exportable;
+  $('#rep-save').disabled = !exportable;
+}
+
 function reportRow(e) {
+  const p = state.projects.find(x => x.name === e.project);
   const row = document.createElement('div');
   row.className = 'rep-row' + (repSel.has(e.taskId) ? ' on' : '') + (e.netZero ? ' zero' : '');
+  if (p) row.style.setProperty('--c', p.color);
+  // Off the board — archived or deleted. Marked in the route slot, the same
+  // slot and the same language as a round trip's ↺: something happened to this
+  // card that the week's route alone does not tell you.
+  const gone = e.deleted || e.archived;
   row.innerHTML = `
     <span class="tick">${ICON.check}</span>
     <span class="rt">${esc(e.title)}</span>
+    <span class="rp">${e.project ? esc(e.project) : '—'}</span>
     <span class="rf">${e.netZero
       ? `${esc(e.to)} <i>&#8634;</i>`
-      : `${esc(e.from)}<i>&#8594;</i>${esc(e.to)}`}</span>
+      : `${esc(e.from)}<i>&#8594;</i>${esc(e.to)}`}${
+      gone ? ` <i title="${tr('offBoard')}">&#8856;</i>` : ''}</span>
     <button class="rd" title="${tr('weeklyReport')}">${C.dayLabel(e.day, locale)}</button>`;
 
   row.onclick = () => {
@@ -1888,10 +1911,7 @@ function reportRow(e) {
         { duration: 180, easing: EASE }
       );
     }
-    $('#rep-count').textContent = `${repSel.size} / ${repEntries.length}`;
-    $('#rep-all').textContent = repSel.size === repEntries.length ? tr('selectNone') : tr('selectAll');
-    $('#rep-copy').disabled = !repSel.size;
-    $('#rep-save').disabled = !repSel.size;
+    syncRepFoot();
   };
 
   $('.rd', row).onclick = ev => { ev.stopPropagation(); editDay(row, e); };
@@ -1940,7 +1960,6 @@ function editDay(row, entry) {
 function reportMarkdown() {
   return C.toMarkdown(selected(), repWeek, {
     projectOrder: state.projects.map(p => p.name),
-    doneStage: state.columns[state.columns.length - 1].name,
     locale,
   });
 }
@@ -1951,8 +1970,11 @@ $('#rep-prev').onclick = () => goWeek(C.addDays(repWeek, -7));
 $('#rep-next').onclick = () => goWeek(C.addDays(repWeek, 7));
 
 $('#rep-all').onclick = () => {
+  // Mutate the set in place, never rebind it: renderReport restores repSel
+  // from repSelByWeek on every pass, so a fresh Set here is discarded before
+  // it reaches the screen. Select-none only ever worked because clear() mutates.
   if (repSel.size === repEntries.length) repSel.clear();
-  else repSel = new Set(repEntries.map(e => e.taskId));
+  else repEntries.forEach(e => repSel.add(e.taskId));
   renderReport(false);
 };
 

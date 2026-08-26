@@ -227,7 +227,7 @@ frame.addEventListener('load', async function run() {
     const rows = [...D.querySelectorAll('.rep-row')];
     const row = rows.find(r => r.textContent.includes('Ship the thing'));
     assert(row, `listed; rows were ${rows.map(r => r.textContent).join(' | ')}`);
-    assert(row.classList.contains('on'), 'ticked by default');
+    assert(!row.classList.contains('on'), 'listed, but not ticked — it is still in Waiting');
     assert(rows.some(r => r.textContent.includes('Drag me')), 'the starter card is listed too');
   });
 
@@ -240,10 +240,24 @@ frame.addEventListener('load', async function run() {
     await openThisWeek();
     const md = W.reportMarkdown();
     assert(md.startsWith('# Progress — '), md.slice(0, 40));
-    assert(md.includes('## ops\n- Ship the thing'), md);
+    assert(md.includes('## Shipped\n- Ship the thing · ops'), md);
     assert(!md.includes('finished'), 'no summary line');
     assert(!md.includes('→'), 'no stage → stage routes in the export');
     assert(!md.includes('Drag me'), 'unfinished and unassigned cards stay out');
+  });
+
+  await test('ticking an in-flight row exports it under its own heading', async () => {
+    const row = [...D.querySelectorAll('.rep-row')].find(r => r.textContent.includes('Drag me'));
+    assert(row, 'the unfinished card is listed');
+    assert(!W.reportMarkdown().includes('In flight'), 'no heading while nothing in flight is ticked');
+    row.click();
+    await sleep(30);
+    const md = W.reportMarkdown();
+    assert(md.includes('## In flight'), md);
+    assert(md.includes('- Drag me'), md);
+    row.click(); // put it back, for the tests that follow
+    await sleep(30);
+    assert(!W.reportMarkdown().includes('In flight'), 'the heading goes with the last ticked row');
   });
 
   await test('unticking a row drops it from the markdown', async () => {
@@ -273,6 +287,19 @@ frame.addEventListener('load', async function run() {
     assert(!row.classList.contains('on'), 'not ticked');
     assert(!W.reportMarkdown().includes('Went and came back'), 'kept out of the report');
     assert(row.textContent.includes('↺'), 'shown as a return, not as Inbox → Inbox');
+  });
+
+  await test('select all means all — a round trip included, because the tick is yours', async () => {
+    // The board pre-ticks nothing it does not believe finished, but "Select all"
+    // is the user overruling that, and it must not keep a private exception:
+    // a hidden rule downstream of the tick is the defect this report was fixed for.
+    D.getElementById('rep-all').click();
+    await sleep(30);
+    assert(W.reportMarkdown().includes('Went and came back'),
+      'select all must not silently skip the row it decided was not worth reporting');
+    D.getElementById('rep-all').click();  // back to none, for the tests that follow
+    await sleep(30);
+    assert(!W.reportMarkdown().includes('Went and came back'), 'and clears again');
   });
 
   await test('re-dating a row moves it into another week', async () => {
@@ -310,7 +337,7 @@ frame.addEventListener('load', async function run() {
     assert(cards().some(c => c.querySelector('h3').textContent === 'Delete me'), 'back');
   });
 
-  await test('a project filters the board and groups the report', async () => {
+  await test('a project filters the board and labels every report row', async () => {
     W.__board.state.projects.push({ id: 'px', name: 'crm', color: '#8FB8FF' });
     W.__board.state.tasks.find(t => t.title === 'Delete me').projectId = 'px';
     W.addTask({ title: 'Unassigned work', columnId: W.__board.state.columns[0].id });
@@ -322,9 +349,14 @@ frame.addEventListener('load', async function run() {
     W.__board.state.filter = null;
     W.render();
     await openThisWeek();
-    const groups = [...D.querySelectorAll('.rep-group')].map(g => g.textContent);
-    assert(groups.includes('crm'), `groups: ${groups}`);
-    assert(groups.includes('No project'), `groups: ${groups}`);
+    // The report groups by tense now; the project rides on the row instead.
+    const groups = [...D.querySelectorAll('.rep-tense')].map(g => g.textContent);
+    assert(groups.length, 'the report is grouped by tense');
+    assert(groups.every(g => ['Shipped', 'In flight'].includes(g)), `groups: ${groups}`);
+    assert(!D.querySelector('.rep-group'), 'no project headings left in the report');
+    const projects = [...D.querySelectorAll('.rep-row .rp')].map(r => r.textContent);
+    assert(projects.includes('crm'), `row projects: ${projects}`);
+    assert(projects.includes('—'), 'an unassigned row says so, so "why is this unticked?" stays answerable');
     W.closeReport();
   });
 

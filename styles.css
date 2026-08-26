@@ -1192,6 +1192,19 @@ kbd {
 .rep-group:first-child { margin-top: 7px; }
 .rep-group .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c, var(--faint)); }
 
+/* Tense headings replaced the project headings, and take their voice. Its own
+   class, not .rep-group with the dot suppressed: markup should never assert
+   something the CSS then hides — that is the habit this modal exists to break. */
+.rep-tense {
+  margin: 15px 0 3px;
+  padding: 0 10px;
+  font: 400 10.5px/1 var(--mono);
+  letter-spacing: .17em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rep-tense:first-child { margin-top: 7px; }
+
 .rep-row {
   display: flex;
   align-items: center;
@@ -1237,6 +1250,28 @@ kbd {
 }
 .rep-row .rf i { font-style: normal; color: var(--faint); padding: 0 4px; }
 .rep-row.zero .rt, .rep-row.zero .rf { color: var(--faint); }
+
+/* The project moved off the group heading and onto the row, keeping the mono
+   voice it had there. It is what the export prints, so the modal shows the
+   same word rather than a colour the reader would have to decode. */
+.rep-row .rp {
+  flex: none;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 10.5px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--c, var(--faint));
+}
+
+/* At phone width the title is down to a few characters. The route is the most
+   redundant thing in the row once the tense heading says which side of the
+   done line the card ended on. */
+@media (max-width: 640px) {
+  .rep-row .rf { display: none; }
+}
 
 .rep-row .rd {
   flex: none;

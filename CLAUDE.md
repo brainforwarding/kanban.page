@@ -43,9 +43,19 @@ Four files, strict split:
 
 **Never compute dates from epoch arithmetic.** Chile has DST; every date decision goes through calendar-date helpers in `core.js` (`ymd`, `mondayOf`, `addDays`). Weeks run Monday–Sunday in America/Santiago.
 
+**The log records user moves, not state.** A card's `columnId` can change with no event appended — `deleteColumn` (which does not rehome its tasks), `restoreTask`, and `migrate`'s rehoming all do it, and archiving logs nothing either. Anything derived from "where is this card now" is therefore not reconstructible from the log, and replaying the log to a past date would resurrect archived cards. Report features that read only the log are safe; ones that read the board are not.
+
 ### Report vs. export — two different views
 
-The report modal shows every card created or moved that week, with routes and per-row ticks. The exported markdown (`toMarkdown`) is narrower by design: only ticked cards that ended in the done stage (last column), grouped by project in `state.projects` order, title only — no summary counts, no stage routes, and unassigned cards stay out. Project order is user-draggable in the Projects panel and drives the filter chips, the report grouping, and the export.
+The report modal shows every card created or moved that week, with routes and per-row ticks. The exported markdown (`toMarkdown`) is narrower: title only, no summary counts, no stage routes.
+
+Both are grouped by **tense** — `shipped` when the row **crossed the done line this week** (`to === doneStage && from !== doneStage`), `inflight` otherwise. The second clause is load-bearing: without it a card that was already done, got reopened and re-closed in the same week announces itself as shipped-this-week, and Select all is one click from putting that in someone else's inbox. No `doneStage` means no tense at all — never guess `shipped`. `aggregateWeek` computes `r.tense` beside `r.include`, from the same expression, and it is the only question anyone asks about a stage. Project order (user-draggable in the Projects panel) sorts within a section and becomes the ` · Project` suffix on each bullet.
+
+Both tenses are pure functions of (events, period): nothing reads live board state, so opening a week from March gives March's answer and no section needs an "as of today" caveat. **Live state may annotate a row but must never classify it** — `lookupTask` reports `archived`, and the row marks it `⊘` beside the route, exactly as netZero marks `↺`. That door is how present-tense state keeps trying to get back in.
+
+The modal shows the route (`from → to`) precisely because the export does not: after tenses, that display is what makes ticking an in-flight row an informed choice rather than a rubber stamp. A later density pass must not quietly drop it.
+
+**The tick is the only filter.** `toMarkdown` emits exactly the entries it is handed and has no opinion of its own; the opinion lives in `aggregateWeek`'s `include` flag, which pre-ticks work that finished (`to === doneStage`) under a project. Everything else is listed, unticked, and one click from being exported anyway. This split is deliberate and load-bearing: it used to re-filter after the tick, so the modal could read "3 / 3" while the clipboard said "Nothing finished." Never reintroduce a filter downstream of the tick — if a rule should shape the export, it belongs in `include` where the user can see and overrule it.
 
 ### Rendering model and its one big gotcha
 
@@ -58,6 +68,10 @@ The report modal shows every card created or moved that week, with routes and pe
 - **Damaged boards keep their event log** — the log is the only copy of the history (see migration tests).
 
 ### Drag pattern (cards, stages, and project rows share it)
+
+Pointer listeners on `document` (no pointer capture — synthetic test events depend on this), a fixed-position ghost clone that follows the pointer with velocity-based tilt, FLIP animation for displaced siblings, and a ghost "flight" to the resting rect on drop. `prefers-reduced-motion` collapses all of it. `dragColumn` is the horizontal case: it must skip the trailing `.ghost-col` (the "add stage" affordance is also a `.col`), and because `render()` rebuilds the board it re-queries the landed column for the flight target.
+
+**Stage order is a semantic, not a preference.** The last column is the done stage everywhere (`columns[columns.length - 1]`) — position, never a name — so reordering stages changes what the report counts as finished. That is the point: before stages could be dragged, a new stage always landed on the right and the only way to place one was to rename stages into each other's positions, which silently moved "done" while the event log kept the old names forever.
 
 ### Design voice
 
