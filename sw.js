@@ -14,7 +14,13 @@ const APP_SHELL = [
 ];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_SHELL)));
+  // Fetch every shell file straight from the network. Pages serves the shell
+  // with max-age=600, so a plain addAll() is answered by the browser's HTTP
+  // cache: deploy twice inside ten minutes and the new cache name gets filled
+  // with the old bytes, activate() deletes the only copy of the real previous
+  // version, and the update the user was just offered changes nothing.
+  const shell = APP_SHELL.map(url => new Request(url, { cache: 'reload' }));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(shell)));
 });
 
 self.addEventListener('activate', event => {
