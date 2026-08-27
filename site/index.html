@@ -1,0 +1,1502 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>kanban.page — a simple kanban for everything you're working on</title>
+<meta name="theme-color" content="#131218">
+<meta name="description" content="A real kanban board — drag, projects, weekly report — in one HTML file that runs in your browser. No account, no server, no analytics. Your coding agent can edit it too. Free, MIT.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="kanban.page — a simple kanban for everything you're working on">
+<meta property="og:description" content="A real kanban board in one HTML file that runs in your browser. No account, no server, no analytics.">
+<meta property="og:image" content="https://kanban.page/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="kanban.page — a simple kanban for everything you're working on">
+<meta name="twitter:description" content="A real kanban board in one HTML file that runs in your browser. No account, no server, no analytics.">
+<meta name="twitter:image" content="https://kanban.page/og.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2314131A'/><rect x='9' y='7' width='6' height='18' rx='1.5' fill='%23FFB454'/><rect x='18' y='7' width='6' height='11' rx='1.5' fill='%235B5768'/></svg>">
+<style>
+/* ─────────────────────────────────────────────────────────
+   board — marketing site
+   Tokens are the app's own tokens. The machine speaks in
+   mono (stages, counts, sessions, specs); the human speaks
+   in Avenir (headlines, card titles).
+   ───────────────────────────────────────────────────────── */
+
+:root{
+  color-scheme: dark;
+  --bg:#131218; --bg-2:#17161E;
+  --surface:#1C1B24; --raise:#23222D; --raise-hi:#2A2835;
+  --line:#2E2C3A; --line-hi:#413E51;
+  --text:#EFECF4; --muted:#9A94A8; --faint:#6A6579;
+  --accent:#FFB454; --accent-fill:#FFB454; --accent-ink:#1A1206; --accent-dim:#6E5027; --accent-wash:#241C10;
+  --sh-1:0 1px 2px rgba(0,0,0,.35), 0 8px 22px -14px rgba(0,0,0,.9);
+  --sh-2:0 18px 50px -18px rgba(0,0,0,.75), 0 2px 10px rgba(0,0,0,.35);
+  --sh-drag:0 28px 60px -20px rgba(0,0,0,.85), 0 3px 12px rgba(0,0,0,.45);
+  --ui:"Avenir Next",Avenir,-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  --mono:"SF Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r:10px;
+  --ease:cubic-bezier(.2,.8,.25,1);
+  --wrap:1120px;
+}
+
+[data-theme="light"]{
+  color-scheme: light;
+  --bg:#F1F0F5; --bg-2:#EDECF2;
+  --surface:#FFFFFF; --raise:#F4F3F8; --raise-hi:#EBE9F2;
+  --line:#E3E1EB; --line-hi:#C8C5D5;
+  --text:#191722; --muted:#6B6779; --faint:#96919F;
+  --accent:#C07310; --accent-fill:#F0A93C; --accent-ink:#2B1C05; --accent-dim:#E8CBA0; --accent-wash:#FBF1E2;
+  --sh-1:0 1px 2px rgba(28,24,42,.05), 0 8px 20px -16px rgba(28,24,42,.4);
+  --sh-2:0 20px 50px -20px rgba(28,24,42,.26), 0 2px 8px rgba(28,24,42,.06);
+  --sh-drag:0 26px 55px -18px rgba(28,24,42,.32), 0 4px 12px rgba(28,24,42,.1);
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:var(--ui); font-size:15px; line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+  transition:background .4s var(--ease), color .4s var(--ease);
+}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+a{color:inherit;text-decoration:none}
+h1,h2,h3,p{margin:0}
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:6px}
+
+.wrap{width:100%;max-width:var(--wrap);margin:0 auto;padding:0 28px}
+
+/* ── shared type ─────────────────────────────────────── */
+
+.eyebrow{
+  font:500 11px/1 var(--mono); letter-spacing:.2em; text-transform:uppercase;
+  color:var(--faint); display:flex; align-items:center; gap:10px;
+}
+.eyebrow::after{content:'';height:1px;flex:1;background:var(--line);max-width:190px}
+
+.head{
+  font-family:var(--ui); font-weight:500;
+  font-size:clamp(1.7rem,3.5vw,2.5rem); line-height:1.08; letter-spacing:-.024em;
+  margin-top:22px; max-width:23ch;
+}
+.head em{font-style:normal;color:var(--accent)}
+.sub{margin-top:16px;color:var(--muted);font-size:16px;max-width:46ch}
+
+/* ── rail ────────────────────────────────────────────── */
+
+.rail{
+  position:sticky; top:0; z-index:60; height:56px;
+  display:flex; align-items:center; gap:18px;
+  padding:0 28px;
+  background:color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter:saturate(160%) blur(14px);
+  -webkit-backdrop-filter:saturate(160%) blur(14px);
+  border-bottom:1px solid transparent;
+  transition:border-color .3s var(--ease), background .3s var(--ease);
+}
+.rail.stuck{border-bottom-color:var(--line)}
+.brand{
+  display:flex;align-items:center;gap:9px;
+  /* the name is an address, so it is set like one: mono, tight, next to the
+     amber block — it reads as a prompt, which is the voice of the whole page */
+  font:500 14px/1 var(--mono); letter-spacing:.01em;
+}
+.blink{
+  width:5px;height:15px;border-radius:1px;background:var(--accent);
+  animation:blink 1.15s steps(1,end) infinite;
+}
+@keyframes blink{0%,55%{opacity:1}56%,100%{opacity:.16}}
+.rail .grow{flex:1}
+.railbtn{
+  font:500 12px/1 var(--mono); letter-spacing:.06em; color:var(--muted);
+  padding:8px 10px; border-radius:7px;
+  transition:color .2s var(--ease), background .2s var(--ease);
+}
+.railbtn:hover{color:var(--text);background:var(--raise)}
+.railcta{
+  font:500 12px/1 var(--mono); letter-spacing:.04em;
+  color:var(--accent-ink); background:var(--accent-fill);
+  padding:9px 14px; border-radius:7px;
+  transition:transform .25s var(--ease), filter .25s var(--ease);
+}
+.railcta:hover{transform:translateY(-1px);filter:brightness(1.07)}
+.railcta:active{transform:translateY(0)}
+
+/* ── hero ────────────────────────────────────────────── */
+
+.hero{padding:clamp(44px,6.5vw,80px) 0 0;position:relative}
+.hero::before{
+  content:'';position:absolute;inset:-56px 0 auto;height:420px;z-index:-1;
+  background:radial-gradient(120% 100% at 50% 0%, var(--bg-2), transparent 70%);
+}
+.h1{
+  font-weight:500; letter-spacing:-.035em;
+  font-size:clamp(2.3rem,6.2vw,4rem); line-height:1.05;
+  max-width:20ch;
+}
+.ln{display:block;overflow:hidden;padding-bottom:.06em;margin-bottom:-.06em}
+.ln > span{display:inline-block;transform:translateY(112%);will-change:transform}
+.cur{
+  display:inline-block;width:.075em;height:.78em;background:var(--accent);
+  margin-left:.12em;vertical-align:-.04em;border-radius:1px;opacity:0;
+}
+.lede{
+  margin-top:24px;max-width:44ch;color:var(--muted);font-size:17px;line-height:1.55;
+}
+.lede b{color:var(--text);font-weight:500}
+.ctas{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:30px}
+.btn{
+  display:inline-flex;align-items:center;gap:9px;
+  height:46px;padding:0 22px;border-radius:9px;
+  font:500 14px/1 var(--ui);letter-spacing:.005em;
+  transition:transform .25s var(--ease), filter .25s var(--ease), background .25s var(--ease), border-color .25s var(--ease);
+}
+.btn.primary{background:var(--accent-fill);color:var(--accent-ink)}
+.btn.primary:hover{transform:translateY(-2px);filter:brightness(1.07)}
+.btn.primary:active{transform:translateY(0)}
+.btn.ghost{border:1px solid var(--line-hi);color:var(--text)}
+.btn.ghost:hover{background:var(--raise);border-color:var(--faint);transform:translateY(-2px)}
+.btn kbd{
+  font:500 10px/1 var(--mono);color:var(--accent-ink);opacity:.62;
+  border:1px solid currentColor;border-radius:4px;padding:3px 4px;
+}
+.fineprint{
+  margin-top:18px;font:400 12px/1.6 var(--mono);letter-spacing:.05em;color:var(--faint);
+}
+.fineprint span{color:var(--muted)}
+
+/* ── the board's before-state ────────────────────────────
+   One flat column, no stages, no colour, no detail. Same cards, same 2px bar
+   — the bar just doesn't mean anything yet. Everything that separates a list
+   from a board is switched off here and switched on by the transition. */
+
+.board.aslist{
+  display:flex;flex-direction:column;align-items:flex-start;gap:9px;
+  padding:26px 16px 100px;overflow:visible;
+}
+/* one column wide, to the pixel. The FLIP animates position and height, never
+   width — so if the list were any other width every card would pop on landing.
+   It also means the INBOX cards barely move sideways: the board grows out of
+   the list instead of everything jumping at once. */
+.board.aslist .card{width:calc((100% - 48px) / 4)}
+.board.aslist .card h3{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* One label where the four stage names will be. It sits exactly where INBOX's
+   header lands, so on the unfold one label visibly becomes four. */
+.listhead{
+  display:none;align-items:center;gap:9px;padding:0 4px 12px;
+  font:500 11px/1 var(--mono);letter-spacing:.18em;color:var(--muted);
+  text-transform:uppercase;
+}
+.board.aslist .listhead{display:flex}
+
+/* A state label, not an explanation. It floats over the board, because that is
+   where the eye already is — dim text below the frame never gets read. It sits
+   in a strip the board reserves: content ends above the bottom padding, so a
+   card can never land underneath it. */
+.legend{
+  position:absolute;left:20px;bottom:20px;z-index:4;pointer-events:none;
+  display:flex;align-items:flex-end;gap:20px;flex-wrap:wrap;
+}
+.legend button{pointer-events:auto}
+.leg{display:block}
+.leg-k{
+  display:block;
+  font:500 11px/1 var(--mono);letter-spacing:.22em;text-transform:uppercase;
+  color:var(--faint);
+}
+.leg-v{display:block;overflow:hidden;padding-bottom:.08em;margin-bottom:-.08em;margin-top:9px}
+.leg-v > span{
+  display:inline-block;
+  font:500 clamp(1.55rem,2.7vw,2.25rem)/1.1 var(--ui);letter-spacing:-.024em;
+  color:var(--muted);transition:color .55s var(--ease);
+}
+/* the payoff lands in the brand colour, on the same beat the chips arrive */
+.legend.after .leg-v > span{color:var(--accent)}
+.legend button{
+  font:inherit;letter-spacing:inherit;color:var(--muted);
+  padding:6px 10px;border-radius:6px;border:1px solid var(--line);
+  transition:color .2s var(--ease), border-color .2s var(--ease), background .2s var(--ease);
+}
+.legend button:hover{color:var(--accent);border-color:var(--accent-dim);background:var(--accent-wash)}
+.legend button[hidden]{display:none}
+.board.aslist .col,
+.board.aslist .drop{display:contents}
+.board.aslist .colhead{display:none}
+.board.aslist .card{
+  height:46px;overflow:hidden;padding-top:13px;cursor:default;
+}
+.board.aslist .card::before{background:var(--line-hi)}
+/* Going to list, the detail must vanish at once: the card's height snaps from
+   66px to 46px with no transition, so a 420ms fade would leave the project name
+   sitting there clipped in half. Coming back, it fades in properly. */
+.board.aslist .card .meta,
+.board.aslist .card .sess{opacity:0;transition-duration:0s;transition-delay:0s}
+.board.aslist{cursor:default}
+
+.card::before{transition:background-color .5s var(--ease) var(--edge-delay,0ms)}
+.card .meta,.card .sess{transition:opacity .42s var(--ease) var(--detail-delay,0ms)}
+.chips{transition:opacity .55s var(--ease)}
+
+/* ── the live board ──────────────────────────────────── */
+
+.stage{margin-top:clamp(36px,4.6vw,56px);position:relative}
+.boardframe{
+  position:relative;
+  border:1px solid var(--line);border-radius:14px;
+  background:linear-gradient(180deg, var(--bg-2), var(--bg));
+  box-shadow:var(--sh-2);
+  overflow:hidden;
+}
+.boardframe::after{
+  content:'';position:absolute;inset:auto 0 0;height:88px;pointer-events:none;
+  background:linear-gradient(180deg,transparent,var(--bg));
+}
+.boardrail{
+  height:42px;display:flex;align-items:center;gap:14px;padding:0 16px;
+  border-bottom:1px solid var(--line);
+  font:500 11px/1 var(--mono);letter-spacing:.16em;color:var(--faint);
+}
+.dots{display:flex;gap:6px}
+.dots i{width:9px;height:9px;border-radius:50%;background:var(--line-hi)}
+.chips{display:flex;gap:14px;overflow:hidden}
+.chip{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.chip i{width:6px;height:6px;border-radius:50%;background:var(--pc)}
+.chip.all{color:var(--text);background:var(--raise-hi);padding:5px 9px;border-radius:20px;letter-spacing:.1em}
+
+.board{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:16px;padding:20px 16px 96px;min-height:300px;align-items:start;
+  touch-action:pan-y;
+}
+.col{min-width:0}
+.colhead{
+  display:flex;align-items:center;gap:9px;padding:0 4px 12px;
+  font:500 11px/1 var(--mono);letter-spacing:.18em;color:var(--muted);
+}
+.coln{color:var(--faint);font-variant-numeric:tabular-nums;transition:color .25s var(--ease)}
+.coln.tick{color:var(--accent)}
+.drop{display:flex;flex-direction:column;gap:9px;min-height:64px;border-radius:var(--r)}
+.drop.over{}
+
+.card{
+  position:relative;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);padding:11px 13px 11px 15px;box-shadow:var(--sh-1);
+  cursor:grab;user-select:none;
+  transition:border-color .2s var(--ease), box-shadow .2s var(--ease);
+}
+.card::before{
+  content:'';position:absolute;left:0;top:9px;bottom:9px;width:2px;
+  border-radius:2px;background:var(--pc,var(--line-hi));
+}
+.card:hover{border-color:var(--line-hi);box-shadow:var(--sh-2)}
+.card h3{font:500 14px/1.35 var(--ui);letter-spacing:-.004em}
+.card .meta{
+  display:flex;align-items:baseline;gap:8px;margin-top:5px;
+  font:400 12px/1 var(--ui);
+}
+.card .proj{color:var(--pc)}
+.card .age{margin-left:auto;font:400 11px/1 var(--mono);color:var(--faint)}
+.card.dragging{
+  opacity:1;pointer-events:none;
+  background:color-mix(in srgb, var(--accent) 8%, transparent);
+  border:1px dashed var(--accent-dim);
+  box-shadow:none;
+}
+.card.dragging > *,
+.card.dragging::before{visibility:hidden}
+.dragghost{
+  position:fixed;z-index:200;pointer-events:none;margin:0;
+  box-shadow:var(--sh-drag);border-color:var(--line-hi);cursor:grabbing;
+  will-change:transform;
+}
+
+.sess{
+  display:flex;align-items:center;gap:7px;width:100%;margin-top:9px;
+  background:var(--raise);border:1px solid var(--line);border-radius:7px;
+  padding:6px 8px;overflow:hidden;position:relative;
+  font:400 11px/1.35 var(--mono);color:var(--muted);text-align:left;
+  transition:border-color .2s var(--ease), background .2s var(--ease);
+}
+.sess:hover{border-color:var(--accent-dim);background:var(--accent-wash)}
+.sess .caret{color:var(--accent);flex:none}
+.sess .txt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sess .sweep{
+  position:absolute;inset:0;background:var(--accent-fill);color:var(--accent-ink);
+  display:flex;align-items:center;padding-left:8px;gap:6px;
+  clip-path:inset(0 100% 0 0);
+  transition:clip-path .3s var(--ease);
+  font:500 11px/1 var(--mono);
+}
+.sess.copied .sweep{clip-path:inset(0 0 0 0)}
+
+.boardrail .grow{flex:1}
+.hint{
+  display:flex;align-items:center;gap:7px;white-space:nowrap;
+  font:400 10px/1 var(--mono);letter-spacing:.16em;color:var(--faint);
+  transition:opacity .7s var(--ease);pointer-events:none;
+}
+.hint svg{width:12px;height:12px;stroke:var(--accent);fill:none;stroke-width:1.6}
+.hint-m{display:none}
+.hint.gone{opacity:0}
+
+/* ── sections ────────────────────────────────────────── */
+
+.sec{padding:clamp(78px,9.5vw,120px) 0 0}
+.sec-b{padding-bottom:clamp(6px,1vw,12px)}
+/* three vocabularies, one per kind of content:
+   mono labels PRINT (a wipe, like the terminal and the copy sweep),
+   type RISES, and surfaces ARRIVE from a little depth. */
+.rv{opacity:0;transform:translateY(16px)}
+.rv.in{opacity:1;transform:none;transition:opacity .62s var(--ease) var(--d,0s), transform .62s var(--ease) var(--d,0s)}
+
+.rv-print{clip-path:inset(0 100% -20% 0);opacity:.001}
+.rv-print.in{
+  clip-path:inset(0 -20% -20% 0);opacity:1;
+  transition:clip-path .72s var(--ease) var(--d,0s), opacity .18s linear var(--d,0s);
+}
+.rv-panel{opacity:0;transform:translateY(22px) scale(.988)}
+.rv-panel.in{
+  opacity:1;transform:none;
+  transition:opacity .7s var(--ease) var(--d,0s), transform .7s var(--ease) var(--d,0s);
+}
+
+
+/* ── agents: terminal + mini board ───────────────────── */
+
+.split{display:grid;grid-template-columns:1.06fr .94fr;gap:20px;margin-top:44px;align-items:stretch}
+.pane{
+  border:1px solid var(--line);border-radius:14px;background:var(--surface);
+  box-shadow:var(--sh-1);overflow:hidden;display:flex;flex-direction:column;
+}
+.panehead{
+  height:38px;display:flex;align-items:center;gap:10px;padding:0 14px;
+  border-bottom:1px solid var(--line);
+  font:500 10px/1 var(--mono);letter-spacing:.18em;color:var(--faint);
+}
+.term{
+  flex:1;padding:16px 16px 22px;background:var(--bg-2);
+  font:400 12.5px/1.75 var(--mono);min-height:250px;white-space:pre-wrap;word-break:break-word;
+}
+.term .l{display:block;white-space:pre-wrap;word-break:break-word}
+.term .p{color:var(--accent)}
+.term .u{color:var(--text)}
+.term .o{color:var(--muted)}
+.term .ok{color:#4FD1A5}
+.tcur{display:inline-block;width:7px;height:14px;background:var(--accent);vertical-align:-2px;animation:blink 1.15s steps(1,end) infinite}
+
+.mini{padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:14px;align-content:start;flex:1;background:var(--bg-2)}
+.mini .drop{gap:9px}
+.mini .card{cursor:default}
+.card.arrive{animation:arrive .55s var(--ease) both}
+@keyframes arrive{
+  from{opacity:0;transform:translateY(-8px) scale(.96);box-shadow:0 0 0 1px var(--accent)}
+  60%{box-shadow:0 0 0 1px var(--accent)}
+  to{opacity:1;transform:none}
+}
+
+/* ── report ──────────────────────────────────────────── */
+
+.repwrap{position:relative;display:grid;grid-template-columns:1.12fr .88fr;gap:20px;margin-top:44px;align-items:start}
+.rep{border:1px solid var(--line);border-radius:14px;background:var(--surface);box-shadow:var(--sh-2);overflow:hidden}
+.rephead{padding:16px 18px 14px;border-bottom:1px solid var(--line)}
+.repweek{font:500 12px/1 var(--mono);letter-spacing:.12em;color:var(--text)}
+.repsum{margin-top:7px;font:400 11px/1 var(--mono);letter-spacing:.06em;color:var(--faint)}
+.repbody{padding:8px 8px 12px;max-height:330px;overflow:hidden}
+.repgroup{padding:12px 10px 4px;font:500 10px/1 var(--mono);letter-spacing:.18em;color:var(--pc)}
+.reprow{display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:7px}
+.reprow:hover{background:var(--raise)}
+.tickbox{
+  width:15px;height:15px;flex:none;border:1px solid var(--line-hi);border-radius:4px;
+  display:grid;place-items:center;color:var(--accent-ink);background:transparent;
+  transition:background .22s var(--ease), border-color .22s var(--ease);
+}
+.tickbox svg{width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;
+  stroke-dasharray:16;stroke-dashoffset:16}
+.reprow.on .tickbox{background:var(--accent-fill);border-color:var(--accent-fill)}
+.reprow.on .tickbox svg{stroke-dashoffset:0;transition:stroke-dashoffset .3s var(--ease) .06s}
+.reprow .t{font:400 13.5px/1.3 var(--ui);color:var(--muted);transition:color .25s var(--ease)}
+.reprow.on .t{color:var(--text)}
+.reprow .route{margin-left:auto;font:400 10.5px/1 var(--mono);letter-spacing:.08em;color:var(--faint);white-space:nowrap}
+.repfoot{
+  display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line);
+  background:var(--raise);font:500 11px/1 var(--mono);letter-spacing:.08em;color:var(--faint);
+}
+.repfoot .primary{
+  background:var(--accent-fill);color:var(--accent-ink);padding:8px 12px;border-radius:6px;margin-left:auto;
+  font:500 11px/1 var(--mono);letter-spacing:.08em;white-space:nowrap;
+  transition:transform .13s var(--ease), filter .13s var(--ease);
+}
+.repfoot .primary.pressed{transform:scale(.94);filter:brightness(.9)}
+
+/* the cursor that shows the left panel producing the right one */
+.ptr{
+  position:absolute;left:0;top:0;width:21px;height:21px;z-index:6;
+  pointer-events:none;opacity:0;
+  filter:drop-shadow(0 3px 7px rgba(0,0,0,.55));
+}
+.ptr svg{width:100%;height:100%;fill:var(--text);stroke:var(--bg);stroke-width:1.3;stroke-linejoin:round}
+.ripple{
+  position:absolute;border-radius:6px;pointer-events:none;z-index:5;
+  border:1.5px solid var(--accent-fill);
+}
+
+.md{
+  border:1px solid var(--line);border-radius:14px;background:var(--bg-2);
+  padding:18px 20px;font:400 12.5px/1.85 var(--mono);color:var(--muted);
+  display:flex;flex-direction:column;min-height:186px;
+  box-shadow:var(--sh-1);
+}
+.mdl{white-space:pre-wrap}
+.mdl.sp{height:.95em}
+.md .h{color:var(--text)}
+.md .g{color:var(--accent)}
+.mdcap{margin-top:12px;font:400 11px/1.5 var(--mono);letter-spacing:.06em;color:var(--faint)}
+
+/* ── fork ────────────────────────────────────────────── */
+
+.fork{
+  margin-top:40px;display:flex;gap:26px;align-items:center;flex-wrap:wrap;
+  border-top:1px solid var(--line);padding-top:34px;
+}
+.ghmark{width:44px;height:44px;fill:var(--line-hi);flex:none}
+.ask{font:400 13px/1.5 var(--ui);color:var(--faint)}
+.ask a{color:var(--muted);border-bottom:1px solid var(--line-hi);padding-bottom:1px;
+  transition:color .2s var(--ease), border-color .2s var(--ease)}
+.ask a:hover{color:var(--accent);border-color:var(--accent-dim)}
+
+/* ── reference block ─────────────────────────────────── */
+
+/* It comes after the ask, so it must not look like another chapter: a hairline,
+   a mono label, no headline. The CTA above stays the loudest thing on screen. */
+.ref{margin-top:clamp(76px,9.5vw,118px)}
+
+.faq{
+  margin-top:26px;border-top:1px solid var(--line);
+  max-width:760px;
+}
+.qa{border-bottom:1px solid var(--line)}
+.qa summary{
+  display:flex;align-items:center;gap:18px;cursor:pointer;
+  padding:17px 2px;list-style:none;
+  font:500 16px/1.35 var(--ui);letter-spacing:-.01em;color:var(--text);
+  transition:color .2s var(--ease);
+}
+.qa summary::-webkit-details-marker{display:none}
+.qa summary:hover{color:var(--accent)}
+.qa summary i{
+  margin-left:auto;flex:none;position:relative;width:11px;height:11px;
+  transition:transform .3s var(--ease);
+}
+.qa summary i::before,.qa summary i::after{
+  content:'';position:absolute;inset:5px 0 auto;height:1.5px;border-radius:2px;
+  background:var(--faint);transition:background .2s var(--ease);
+}
+.qa summary i::after{transform:rotate(90deg);transition:transform .3s var(--ease), background .2s var(--ease)}
+.qa[open] summary i::after{transform:rotate(0deg)}
+.qa[open] summary i::before,.qa[open] summary i::after{background:var(--accent)}
+.qa-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .34s var(--ease)}
+.qa[open] .qa-body{grid-template-rows:1fr}
+.qa-body > p{
+  overflow:hidden;margin:0;
+  font:400 15px/1.6 var(--ui);color:var(--muted);max-width:56ch;
+}
+.qa-body > p > span{display:block;padding:0 0 20px}
+.qa-body code{font:400 13.5px/1 var(--mono);color:var(--accent)}
+
+/* a third tier on purpose: it sits after the ask, it never competes with it */
+.share{
+  display:inline-flex;align-items:center;gap:9px;margin-top:24px;
+  font:500 11px/1 var(--mono);letter-spacing:.12em;color:var(--faint);
+  padding:9px 13px;border-radius:7px;
+  transition:color .2s var(--ease), background .2s var(--ease);
+}
+.share:hover{color:var(--text);background:var(--raise)}
+.share svg{width:12px;height:12px;fill:currentColor;flex:none}
+
+/* ── who uses it ─────────────────────────────────────── */
+
+.proof{margin-top:clamp(48px,6vw,74px)}
+.prooflbl{font:500 10px/1 var(--mono);letter-spacing:.2em;color:var(--faint);text-transform:uppercase}
+.prooflist{display:flex;flex-wrap:wrap;align-items:center;gap:18px 44px;margin-top:20px}
+/* drop a file in site/logos/ and swap the text for <img src="logos/x.svg" alt="X">.
+   The filter flattens any logo to a single-colour mark so the row reads as one set. */
+.logo{font:500 16px/1.3 var(--ui);color:var(--muted);letter-spacing:-.01em}
+.logo img{
+  display:block;height:26px;width:auto;
+  filter:grayscale(1) brightness(0) invert(1);opacity:.52;
+  transition:opacity .25s var(--ease);
+}
+[data-theme="light"] .logo img{filter:grayscale(1) brightness(0);opacity:.46}
+.logo:hover img{opacity:.9}
+
+.keys{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px;max-width:760px}
+.keycap{display:flex;align-items:center;gap:9px;background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:7px 11px}
+.keycap kbd{font:500 10px/1 var(--mono);color:var(--accent);background:var(--accent-wash);border:1px solid var(--accent-dim);border-radius:4px;padding:4px 6px;min-width:22px;text-align:center}
+.keycap span{font:400 12px/1 var(--ui);color:var(--muted)}
+
+/* ── close ───────────────────────────────────────────── */
+
+.close{padding:clamp(86px,11vw,138px) 0 0;text-align:center}
+.close .h1{max-width:none;margin:0 auto;font-size:clamp(2.1rem,5.6vw,3.9rem)}
+.close .ctas{justify-content:center}
+.close .fineprint{max-width:64ch;margin-left:auto;margin-right:auto}
+
+.foot{
+  margin-top:clamp(80px,11vw,130px);border-top:1px solid var(--line);
+  padding:22px 0 40px;
+  display:flex;flex-wrap:wrap;align-items:center;gap:8px 22px;
+  font:400 11.5px/1.6 var(--mono);letter-spacing:.06em;color:var(--faint);
+}
+.foot a{color:var(--muted);transition:color .2s var(--ease)}
+/* the one line in the footer meant to be read: "no company here, a person" */
+.foot .by{
+  display:inline-flex;align-items:center;gap:7px;
+  color:var(--text);padding:2px 0;
+}
+.foot .by svg{width:11px;height:11px;fill:currentColor;flex:none}
+.foot .by:hover{color:var(--accent)}
+.foot a:hover{color:var(--accent)}
+.foot .grow{flex:1}
+
+/* ── responsive ──────────────────────────────────────── */
+
+@media (max-width:900px){
+  .split,.repwrap{grid-template-columns:1fr}
+  .board{grid-template-columns:repeat(2,minmax(0,1fr));min-height:0}
+  .board.aslist .card{width:calc((100% - 16px) / 2)}
+}
+@media (max-width:620px){
+  .wrap{padding:0 20px}
+  .rail{padding:0 20px;gap:10px}
+  .railbtn.hide-s{display:none}
+  /* the board scrolls sideways on a phone, the way the real app does */
+  .board{
+    grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:74%;
+    gap:12px;padding:18px 16px 92px;min-height:0;
+    /* the snapport is the PADDING box, so without this the snap scrolls the
+       gutter away and the first card sits flush against the frame */
+    overflow-x:auto;scroll-snap-type:x proximity;scroll-padding-inline:16px;
+    touch-action:pan-x pan-y;-webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
+  }
+  .board::-webkit-scrollbar{display:none}
+  .board.aslist{padding:18px 16px 92px}
+  .board.aslist .card{width:74%}
+  .col{scroll-snap-align:start}
+
+  /* a clipped card at the edge has to read as "there is more", not as broken */
+  .boardframe::after{
+    inset:42px 0 0 auto;width:54px;height:auto;
+    background:linear-gradient(90deg,transparent,var(--bg));
+  }
+  /* a long title must not butt against its route */
+  .reprow .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .reprow .route{padding-left:12px}
+  .hint-d{display:none}
+  .hint-m{display:inline}
+  .chips{display:none}
+  .srow{grid-template-columns:1fr;gap:4px}
+  .keycap span{font-size:11.5px}
+  .lede{font-size:16px}
+  .h1{letter-spacing:-.028em}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
+  .ln > span{transform:none !important}
+  .cur{opacity:1 !important}
+  .rv,.rv-panel{opacity:1 !important;transform:none !important}
+  .rv-print{opacity:1 !important;clip-path:none !important}
+}
+</style>
+</head>
+<body>
+
+<header class="rail" id="rail">
+  <a class="brand" href="#top"><span class="blink"></span>kanban.page</a>
+  <span class="grow"></span>
+  <button class="railbtn" id="themeBtn" title="Light / dark">theme</button>
+  <a class="railbtn hide-s" href="https://github.com/brainforwarding/kanban.html">source</a>
+  <a class="railcta" href="https://kanban.page/app/">Open the board</a>
+</header>
+
+<main id="top">
+
+<!-- ── hero ───────────────────────────────────────────── -->
+<section class="hero">
+  <div class="wrap">
+    <h1 class="h1">
+      <span class="ln"><span>A simple kanban</span></span>
+      <span class="ln"><span>for everything</span></span>
+      <span class="ln"><span>you&rsquo;re working on.</span><i class="cur"></i></span>
+    </h1>
+    <p class="lede" id="lede">Keep your work organised by stage and by project. Free, works offline, no account — <b>and your coding agent can edit it too.</b></p>
+    <div class="ctas" id="ctas">
+      <a class="btn primary" href="https://kanban.page/app/">Open the board</a>
+      <a class="btn ghost" href="https://github.com/brainforwarding/kanban.html">Read the source</a>
+    </div>
+    <p class="fineprint" id="fine">free &nbsp;·&nbsp; MIT &nbsp;·&nbsp; <span>installs to your dock</span> &nbsp;·&nbsp; <span>works offline</span></p>
+  </div>
+
+  <div class="wrap stage">
+    <div class="boardframe">
+      <div class="boardrail">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span class="chips">
+          <span class="chip all">ALL</span>
+          <span class="chip" style="--pc:#6FA8FF"><i></i>Website</span>
+          <span class="chip" style="--pc:#4FD1A5"><i></i>API</span>
+          <span class="chip" style="--pc:#FFB454"><i></i>Growth</span>
+          <span class="chip" style="--pc:#56C8E0"><i></i>Ops</span>
+        </span>
+        <span class="grow"></span>
+        <span class="hint" id="hint"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V11m0-1a1.5 1.5 0 0 1 3 0v5.5a5.5 5.5 0 0 1-5.5 5.5h-1a5.5 5.5 0 0 1-5.5-5.5v-3a1.5 1.5 0 0 1 3 0"/></svg><span class="hint-d">live — drag a card</span><span class="hint-m">live — swipe →</span></span>
+      </div>
+
+      <div class="board" id="board">
+        <header class="listhead"><span>Your tasks</span><span class="coln">7</span></header>
+        <section class="col"><header class="colhead"><span>INBOX</span><span class="coln">2</span></header><div class="drop">
+          <article class="card" style="--pc:#FFB454"><h3>Draft the launch post</h3><div class="meta"><span class="proj">Growth</span><span class="age">2d</span></div></article>
+          <article class="card" style="--pc:#6FA8FF"><h3>Refresh the pricing page</h3><div class="meta"><span class="proj">Website</span><span class="age">3d</span></div></article>
+        </div></section>
+
+        <section class="col"><header class="colhead"><span>DOING</span><span class="coln">2</span></header><div class="drop">
+          <article class="card" style="--pc:#4FD1A5"><h3>Rate limiting for the API</h3><div class="meta"><span class="proj">API</span><span class="age">2d</span></div>
+            <button class="sess" data-copy="claude --resume 7f3a9c12-4b6e-4f2a-9d1c-8e5b2a01f7c4"><span class="caret">&#9656;</span><span class="txt">claude --resume 7f3a9c12-4b6e-4f2a&hellip;</span><span class="sweep">&#10003; copied to clipboard</span></button>
+          </article>
+          <article class="card" style="--pc:#FFB454"><h3>Onboarding email sequence</h3><div class="meta"><span class="proj">Growth</span><span class="age">1d</span></div></article>
+        </div></section>
+
+        <section class="col"><header class="colhead"><span>WAITING</span><span class="coln">1</span></header><div class="drop">
+          <article class="card" style="--pc:#4FD1A5"><h3>Review PR #412</h3><div class="meta"><span class="proj">API</span><span class="age">4d</span></div></article>
+        </div></section>
+
+        <section class="col"><header class="colhead"><span>DONE</span><span class="coln">2</span></header><div class="drop">
+          <article class="card" style="--pc:#6FA8FF"><h3>Onboarding tour v2</h3><div class="meta"><span class="proj">Website</span><span class="age">1d</span></div></article>
+          <article class="card" style="--pc:#56C8E0"><h3>Postgres 16 upgrade</h3><div class="meta"><span class="proj">Ops</span><span class="age">3d</span></div></article>
+        </div></section>
+      </div>
+
+      <div class="legend">
+        <p class="leg">
+          <span class="leg-k" id="legK">Before</span>
+          <span class="leg-v"><span id="legV">To-do list</span></span>
+        </p>
+        <button id="capReplay" hidden>&#9656; watch it again</button>
+      </div>
+    </div>
+
+    <!-- validation belongs here: you just watched it move -->
+    <div class="proof rv">
+      <p class="prooflbl">In use by people at</p>
+      <div class="prooflist">
+        <span class="logo">Common Sense Media</span>
+        <span class="logo">Circles Learning</span>
+        <span class="logo">Universidad de los Andes</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── agents ─────────────────────────────────────────── -->
+<section class="sec">
+  <div class="wrap">
+    <p class="eyebrow rv-print">Agents</p>
+    <h2 class="head rv" style="--d:.1s">Each card remembers its <em>agent session</em>.</h2>
+    <p class="sub rv" style="--d:.19s">If you run Claude Code or Codex in a terminal, every task has a session you can pick up again. Keep that resume command on the card: click it, paste it in your terminal, and you&rsquo;re back in that thread. <b>And your agent can keep the board up to date itself.</b></p>
+
+    <div class="split rv-panel" style="--d:.3s">
+      <div class="pane">
+        <div class="panehead"><span class="dots"><i></i><i></i><i></i></span> ZSH — ~/work</div>
+        <div class="term" id="term"></div>
+      </div>
+      <div class="pane">
+        <div class="panehead">BOARD</div>
+        <div class="mini" id="mini">
+          <section class="col"><header class="colhead"><span>DOING</span><span class="coln">1</span></header><div class="drop" id="mDoing">
+            <article class="card" style="--pc:#4FD1A5"><h3>Rate limiting for the API</h3><div class="meta"><span class="proj">API</span><span class="age">2d</span></div>
+              <button class="sess" data-copy="codex resume 019a4f2b-8c1d-7e3a-b5f6-2d9c8a7e1b40"><span class="caret">&#9656;</span><span class="txt">codex resume 019a4f2b-8c1d&hellip;</span><span class="sweep">&#10003; copied to clipboard</span></button>
+            </article>
+          </div></section>
+          <section class="col"><header class="colhead"><span>DONE</span><span class="coln">1</span></header><div class="drop" id="mDone">
+            <article class="card" style="--pc:#6FA8FF"><h3>Onboarding tour v2</h3><div class="meta"><span class="proj">Website</span><span class="age">1d</span></div></article>
+          </div></section>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── report ─────────────────────────────────────────── -->
+<section class="sec">
+  <div class="wrap">
+    <p class="eyebrow rv-print">Report</p>
+    <h2 class="head rv" style="--d:.1s">Friday&rsquo;s update, <em>already written</em>.</h2>
+    <p class="sub rv" style="--d:.19s">Press <b>R</b>. Everything you created or moved this week, Monday to Sunday. Tick what shipped and copy clean Markdown — no counts, no routes, nothing your team has to decode.</p>
+
+    <div class="repwrap rv-panel" style="--d:.3s">
+      <span class="ptr" id="ptr" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5.6 2.3 19.3 11.4a.62.62 0 0 1-.26 1.13l-5.5.93a.62.62 0 0 0-.44.32l-2.62 4.9a.62.62 0 0 1-1.16-.21L5.6 2.3Z"/></svg></span>
+      <div class="rep">
+        <div class="rephead">
+          <div class="repweek">MON 18 &ndash; SUN 24 AUG 2026</div>
+          <div class="repsum">9 cards &nbsp;·&nbsp; 3 created &nbsp;·&nbsp; 5 finished</div>
+        </div>
+        <div class="repbody" id="repbody">
+          <div class="repgroup" style="--pc:#6FA8FF">WEBSITE</div>
+          <div class="reprow"><span class="tickbox"><svg viewBox="0 0 12 12"><path d="M2 6.3 4.6 9 10 3.2"/></svg></span><span class="t">Onboarding tour v2</span><span class="route">DOING &rarr; DONE</span></div>
+          <div class="reprow"><span class="tickbox"><svg viewBox="0 0 12 12"><path d="M2 6.3 4.6 9 10 3.2"/></svg></span><span class="t">Refresh the pricing page</span><span class="route">NEW &rarr; INBOX</span></div>
+          <div class="repgroup" style="--pc:#4FD1A5">API</div>
+          <div class="reprow"><span class="tickbox"><svg viewBox="0 0 12 12"><path d="M2 6.3 4.6 9 10 3.2"/></svg></span><span class="t">Rate limiting for the public API</span><span class="route">DOING &rarr; DONE</span></div>
+          <div class="reprow"><span class="tickbox"><svg viewBox="0 0 12 12"><path d="M2 6.3 4.6 9 10 3.2"/></svg></span><span class="t">Invoice PDF export</span><span class="route">WAITING &rarr; DONE</span></div>
+          <div class="reprow"><span class="tickbox"><svg viewBox="0 0 12 12"><path d="M2 6.3 4.6 9 10 3.2"/></svg></span><span class="t">Review PR #412</span><span class="route">DOING &rarr; WAITING</span></div>
+        </div>
+        <div class="repfoot"><span id="repcount">0 selected</span><button class="primary" id="repcopy"><span id="repcopylbl">Copy markdown</span></button></div>
+      </div>
+
+      <div>
+        <div class="md" id="mdpane">
+          <span class="mdl h"># Progress — 18–24 Aug 2026</span>
+          <span class="mdl sp"></span>
+          <span class="mdl g">## Website</span>
+          <span class="mdl">- Onboarding tour v2</span>
+          <span class="mdl sp"></span>
+          <span class="mdl g">## API</span>
+          <span class="mdl">- Rate limiting for the public API</span>
+          <span class="mdl">- Invoice PDF export</span>
+        </div>
+        <p class="mdcap">Only what actually finished.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── fork: the page takes a breath before the ask ──── -->
+<section class="sec">
+  <div class="wrap">
+    <p class="eyebrow rv-print">Fork</p>
+    <h2 class="head rv" style="--d:.1s">Want the board to work differently? <em>Ask your agent</em>.</h2>
+    <p class="sub rv" style="--d:.19s">It&rsquo;s open source. Publish your fork with GitHub Pages and you get your own board, at your own URL. <b>And because it&rsquo;s a fork, you can pull new versions whenever you want them.</b></p>
+
+    <div class="fork rv-panel" style="--d:.3s">
+      <svg class="ghmark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+      <a class="btn ghost" href="https://github.com/brainforwarding/kanban.html/fork">Fork it on GitHub</a>
+      <p class="ask">Missing something? <a href="https://github.com/brainforwarding/kanban.html/issues/new">Tell me &rarr;</a></p>
+    </div>
+  </div>
+</section>
+
+<!-- ── close ──────────────────────────────────────────── -->
+<section class="close">
+  <div class="wrap">
+    <h2 class="h1 rv">Nothing to sign up for.</h2>
+    <div class="ctas rv" style="--d:.06s">
+      <a class="btn primary" href="https://kanban.page/app/">Open the board</a>
+    </div>
+    <p class="fineprint rv" style="--d:.12s">opens in about a second &nbsp;·&nbsp; stays in your browser</p>
+    <a class="share rv" style="--d:.18s" target="_blank" rel="noopener"
+       href="https://x.com/intent/post?text=A%20kanban%20board%20in%20one%20HTML%20file.%20No%20account%2C%20no%20server%2C%20nothing%20leaves%20your%20browser.&url=https%3A%2F%2Fkanban.page%2F">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+      share it
+    </a>
+  </div>
+</section>
+
+<!-- ── reference: questions, then the shortcut sheet ─── -->
+<section class="ref">
+  <div class="wrap">
+    <p class="eyebrow rv-print">Questions</p>
+
+    <div class="faq rv-panel" style="--d:.3s">
+      <details class="qa"><summary>Where is my data?<i></i></summary>
+        <div class="qa-body"><p><span>In your browser, on this machine. There is no server to send it to.</span></p></div>
+      </details>
+      <details class="qa"><summary>Is it really free?<i></i></summary>
+        <div class="qa-body"><p><span>Yes. MIT licensed. There is no paid version.</span></p></div>
+      </details>
+      <details class="qa"><summary>Does it work offline?<i></i></summary>
+        <div class="qa-body"><p><span>Yes, after the first visit. Install it to your dock and it opens like an app.</span></p></div>
+      </details>
+      <details class="qa"><summary>Can my board disappear?<i></i></summary>
+        <div class="qa-body"><p><span>Only if something clears your browser&rsquo;s site data. In Chrome, open <code>chrome://settings/content/siteData</code> and add this site under <em>Allowed to save data on your device</em>. Back up any time with <code>⋯ → Export backup</code>.</span></p></div>
+      </details>
+      <details class="qa"><summary>Can I change it?<i></i></summary>
+        <div class="qa-body"><p><span>Fork it. ~3,500 lines of vanilla JS, no build step, no dependencies.</span></p></div>
+      </details>
+      <details class="qa"><summary>Does it work on my phone?<i></i></summary>
+        <div class="qa-body"><p><span>Yes. But each browser keeps its own copy and there is no sync, so a phone starts empty. Move one across with <code>⋯ → Export backup</code>, then <code>Import backup</code>.</span></p></div>
+      </details>
+    </div>
+
+    <div class="keys rv" style="--d:.42s">
+      <span class="keycap"><kbd>N</kbd><span>new card</span></span>
+      <span class="keycap"><kbd>R</kbd><span>weekly report</span></span>
+      <span class="keycap"><kbd>/</kbd><span>search</span></span>
+      <span class="keycap"><kbd>T</kbd><span>light / dark</span></span>
+      <span class="keycap"><kbd>D</kbd><span>compact</span></span>
+      <span class="keycap"><kbd>F</kbd><span>flag</span></span>
+      <span class="keycap"><kbd>⌘V</kbd><span>paste a resume command as a card</span></span>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <div class="wrap" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 22px">
+    <span>kanban.page &mdash; made by <a class="by" href="https://x.com/sebasonearth" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>@sebasonearth</a></span>
+    <span class="grow"></span>
+    <a href="https://github.com/brainforwarding/kanban.html">github</a>
+    <a href="https://github.com/brainforwarding/kanban.html/blob/main/LICENSE">MIT</a>
+    <span>no analytics, no cookies</span>
+  </div>
+</footer>
+
+</main>
+
+<script>
+(() => {
+'use strict';
+
+const EASE = 'cubic-bezier(.2,.8,.25,1)';
+// things that start at rest and end at rest, travelling far, want ease-in-out
+const MORPH_EASE = 'cubic-bezier(.42,.02,.18,1)';
+let live = false;   // the board is inert until it has finished becoming one
+const RM   = matchMedia('(prefers-reduced-motion: reduce)');
+const $    = (s, r = document) => r.querySelector(s);
+const $$   = (s, r = document) => [...r.querySelectorAll(s)];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ── theme ─────────────────────────────────────────────
+   T toggles, same key as the app. */
+const root = document.documentElement;
+const themeBtn = $('#themeBtn');
+try { const s = localStorage.getItem('board.site.theme'); if (s) root.dataset.theme = s; } catch {}
+function toggleTheme() {
+  const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  root.dataset.theme = next;
+  $('meta[name="theme-color"]').content = next === 'dark' ? '#131218' : '#F1F0F5';
+  try { localStorage.setItem('board.site.theme', next); } catch {}
+}
+themeBtn.addEventListener('click', toggleTheme);
+addEventListener('keydown', e => {
+  if ((e.key === 't' || e.key === 'T') && !e.metaKey && !e.ctrlKey && !e.altKey
+      && !/^(input|textarea)$/i.test(e.target.tagName)) toggleTheme();
+});
+
+/* ── rail ──────────────────────────────────────────── */
+const rail = $('#rail');
+addEventListener('scroll', () => rail.classList.toggle('stuck', scrollY > 8), { passive: true });
+
+/* ── FLIP ──────────────────────────────────────────── */
+function flip(nodes, mutate, { dur = 420, stagger = 0, lead = 0, ease = EASE } = {}) {
+  if (RM.matches) { mutate(); return; }
+  const first = new Map();
+  nodes.forEach(n => first.set(n, n.getBoundingClientRect()));
+  mutate();
+  nodes.forEach((n, i) => {
+    const a = first.get(n), b = n.getBoundingClientRect();
+    const dx = a.left - b.left, dy = a.top - b.top;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+    // Anything with a delay MUST fill backwards, or it sits at its destination
+    // for the length of the delay and then snaps back to fly in. Invisible at a
+    // 24ms stagger; glaring at 110ms.
+    const delay = lead + i * stagger;
+    n.animate(
+      [{ transform: `translate(${dx}px,${dy}px)` }, { transform: 'none' }],
+      { duration: dur, delay, easing: ease, fill: delay ? 'backwards' : 'none' }
+    );
+  });
+}
+
+function rise(el, { delay = 0, dur = 640, y = 14, scale = 1 } = {}) {
+  if (RM.matches) return;
+  el.style.opacity = '0';
+  const a = el.animate(
+    [{ opacity: 0, transform: `translateY(${y}px) scale(${scale})` }, { opacity: 1, transform: 'none' }],
+    { duration: dur, delay, easing: EASE, fill: 'both' }
+  );
+  a.finished.then(() => { a.cancel(); el.style.opacity = ''; }).catch(() => {});
+}
+
+function counts(scope) {
+  $$('.col', scope).forEach(col => {
+    const n = String($$('.card', col).length);
+    const el = $('.coln', col);
+    if (el.textContent !== n) {
+      el.textContent = n;
+      el.classList.add('tick');
+      setTimeout(() => el.classList.remove('tick'), 620);
+    }
+  });
+}
+
+/* ── hero: the page deals itself ───────────────────── */
+(function heroIn() {
+  const lines = $$('.hero .h1 .ln > span');
+  const cur = $('.hero .cur');
+  lines.forEach(s => (s.style.transform = 'none'));
+  cur.style.opacity = '1';
+
+  const frame = $('.boardframe');
+  const bd = $('#board');
+  const cards = $$('.card', bd);
+  const heads = $$('.colhead', bd);
+
+  // Reduced motion gets the board outright — the argument is in the headline.
+  if (RM.matches) { boardLive(); return; }
+
+  lines.forEach((s, i) => {
+    const a = s.animate([{ transform: 'translateY(112%)' }, { transform: 'none' }],
+      { duration: 880, delay: 90 + i * 95, easing: EASE, fill: 'both' });
+    a.finished.then(() => a.cancel()).catch(() => {});
+  });
+  cur.style.opacity = '0';
+  setTimeout(() => { cur.style.opacity = '1'; }, 960);
+
+  rise($('#lede'),  { delay: 360, y: 10 });
+  rise($('#ctas'),  { delay: 450, y: 10 });
+  rise($('#fine'),  { delay: 530, y: 10 });
+  rise(frame, { delay: 380, y: 22, dur: 760 });
+
+  // the flat list arrives first, and is allowed to just sit there
+  bd.classList.add('aslist');
+  $('.chips').style.opacity = '0';
+  $('#hint').style.opacity = '0';
+  cards.forEach((c, i) => rise(c, { delay: 620 + i * 48, y: 12, dur: 460 }));
+
+  // The board sits below the fold on most screens, so a timer would transform it
+  // while you can't see it — you'd arrive to a board and never know there was a
+  // list. Wait until the whole frame is on screen, then let it sit a beat.
+  let armed = false;
+  const watch = new IntersectionObserver(es => {
+    const e = es[0];
+    if (armed || !e.isIntersecting) return;
+    const r = e.boundingClientRect;
+    const RAIL = 56;                            // the sticky bar covers the top edge
+    const seen = r.height <= innerHeight - RAIL - 24
+      ? r.top >= RAIL && r.bottom <= innerHeight   // it fits: all of it, or nothing
+      : e.intersectionRatio > .75;                 // taller than the window: as much as we get
+    if (!seen) return;
+    armed = true;
+    watch.disconnect();
+    setTimeout(unfold, 900);
+  }, { threshold: [0, .3, .6, .8, .95, 1] });
+
+  // only start watching once the list has finished arriving
+  setTimeout(() => watch.observe(frame), 1450);
+
+  const legend = $('.legend'), legK = $('#legK'), legV = $('#legV'), replay = $('#capReplay');
+
+  // the word swaps like an odometer, under the same mask the headline uses
+  function setLegend(kind, word, after) {
+    legend.classList.toggle('after', after);
+
+    const ko = legK.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, easing: EASE, fill: 'forwards' });
+    ko.finished.then(() => {
+      legK.textContent = kind; ko.cancel();
+      legK.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, easing: EASE, fill: 'backwards' });
+    }).catch(() => { legK.textContent = kind; });
+
+    const vo = legV.animate([{ transform: 'none' }, { transform: 'translateY(-120%)' }],
+      { duration: 280, easing: MORPH_EASE, fill: 'forwards' });
+    vo.finished.then(() => {
+      legV.textContent = word; vo.cancel();
+      legV.animate([{ transform: 'translateY(120%)' }, { transform: 'none' }],
+        { duration: 420, easing: EASE, fill: 'backwards' });
+    }).catch(() => { legV.textContent = word; });
+  }
+
+  replay.addEventListener('click', () => {
+    if (!live) return;
+    replay.hidden = true;
+    refold();
+    setTimeout(unfold, 620 + 6 * 45 + 700);
+  });
+
+  function unfold() { morph(false, 950, 95); }
+  function refold() { morph(true,  620, 45); }
+
+  // chips and the drag hint belong to the board only; a list has neither
+  function fade(el, show, dur, delay = 0) {
+    el.getAnimations().forEach(a => a.cancel());
+    el.style.opacity = '';
+    el.animate([{ opacity: show ? 0 : 1 }, { opacity: show ? 1 : 0 }],
+      { duration: dur, delay, easing: EASE, fill: 'both' });
+  }
+
+  // One routine, both directions. Cards translate and change height; they never
+  // scale, because scaling a card squashes the text inside it.
+  function morph(toList, DUR, STAG) {
+    live = false;
+    replay.hidden = true;
+    const tall = frame.getBoundingClientRect().height;
+    const first = cards.map(c => c.getBoundingClientRect());
+
+    // the one label and the four stage names swap in place, so it reads as
+    // one becoming four rather than one disappearing and four arriving
+    const lh = bd.querySelector('.listhead');
+    let ghost = null;
+    if (!toList) {
+      const lr = lh.getBoundingClientRect(), fr = frame.getBoundingClientRect();
+      ghost = lh.cloneNode(true);
+      ghost.style.cssText = 'position:absolute;display:flex;margin:0;pointer-events:none;z-index:3;' +
+        `left:${lr.left - fr.left}px;top:${lr.top - fr.top}px`;
+      frame.append(ghost);
+    }
+
+    bd.classList.toggle('aslist', toList);
+
+    cards.forEach((c, i) => {
+      const a = first[i], b = c.getBoundingClientRect();
+      const dx = a.left - b.left, dy = a.top - b.top;
+      // colour arrives in the air — the eye reads colour while it moves;
+      // the text waits for the landing, because moving text is just a blur
+      c.style.setProperty('--edge-delay',   toList ? '0ms' : (i * STAG + 120) + 'ms');
+      c.style.setProperty('--detail-delay', toList ? '0ms' : (i * STAG + 820) + 'ms');
+      c.animate([
+        { transform: `translate(${dx}px,${dy}px)`, height: `${Math.round(a.height)}px` },
+        { transform: 'none', height: `${Math.round(b.height)}px` }
+      ], { duration: DUR, delay: i * STAG, easing: MORPH_EASE, fill: 'backwards' });
+    });
+
+    const landed = DUR + (cards.length - 1) * STAG;
+
+    // hold the taller box open until the last card is home
+    const short = frame.getBoundingClientRect().height;
+    if (Math.abs(tall - short) > 2) {
+      const big = Math.max(tall, short), grow = short > tall;
+      frame.animate(grow
+        ? [{ height: tall + 'px' }, { height: short + 'px' }]
+        : [{ height: tall + 'px' }, { height: tall + 'px', offset: .72 }, { height: short + 'px' }],
+        { duration: grow ? DUR : landed + 500, easing: MORPH_EASE, fill: 'backwards' });
+    }
+
+    if (toList) {
+      fade($('.chips'), false, 260);
+      fade($('#hint'), false, 260);
+      lh.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, delay: 180, easing: EASE, fill: 'backwards' });
+      setLegend('Before', 'To-do list', false);
+    } else {
+      ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 320, easing: EASE, fill: 'forwards' })
+        .finished.then(() => ghost.remove()).catch(() => ghost.remove());
+      heads.forEach((h, i) => {
+        const a = h.animate([{ opacity: 0 }, { opacity: 1 }],
+          { duration: 420, delay: 260 + i * 150, easing: EASE, fill: 'both' });
+        a.finished.then(() => { a.cancel(); h.style.opacity = ''; }).catch(() => {});
+      });
+      fade($('.chips'), true, 520, landed - 320);
+      fade($('#hint'), true, 520, landed - 260);
+      setTimeout(() => setLegend('After', 'Kanban', true), landed - 400);
+    }
+
+    setTimeout(() => { if (!toList) boardLive(); }, landed + 250);
+  }
+})();
+
+function boardLive() {
+  $('#board').classList.remove('aslist');
+  $('.chips').style.opacity = '';
+  $('#hint').style.opacity = '';
+  $('#legK').textContent = 'After';
+  $('#legV').textContent = 'Kanban';
+  $('.legend').classList.add('after');
+  $('#capReplay').hidden = RM.matches;
+  live = true;
+}
+
+/* ── the live board ────────────────────────────────── */
+const board = $('#board');
+const hint  = $('#hint');
+let hovering = false, dragging = false, onscreen = true, autoT = 0;
+
+const canAuto = () => live && !hovering && !dragging && onscreen && !document.hidden && !RM.matches;
+
+board.addEventListener('pointerenter', () => (hovering = true));
+board.addEventListener('pointerleave', () => (hovering = false));
+new IntersectionObserver(es => (onscreen = es[0].isIntersecting), { threshold: .18 }).observe(board);
+
+function hideHint() { hint.classList.add('gone'); }
+setTimeout(hideHint, 16000);
+
+function moveCard(card, drop, before = null) {
+  const all = $$('.card', board);
+  const from = card.getBoundingClientRect();
+  card.getAnimations().forEach(a => a.cancel());
+  flip(all.filter(c => c !== card), () => drop.insertBefore(card, before), { dur: 460, lead: 90 });
+  const to = card.getBoundingClientRect();
+  const dx = from.left - to.left, dy = from.top - to.top;
+  if (RM.matches) { counts(board); return; }
+  card.style.zIndex = '5';
+  // dx > 0 means the card is travelling left, so lean it that way
+  const lean = dx > 0 ? -1.9 : 1.9;
+  const a = card.animate([
+    { transform: `translate(${dx}px,${dy}px) rotate(0deg) scale(1)` },
+    { transform: `translate(${dx * .42}px,${dy * .42}px) rotate(${lean}deg) scale(1.04)`, offset: .42 },
+    { transform: 'none' }
+  ], { duration: 580, easing: EASE });
+  a.finished.then(() => (card.style.zIndex = '')).catch(() => {});
+  counts(board);
+}
+
+function autoMove() {
+  const cols = $$('.col', board);
+  const last = cols.length - 1;
+  const pool = [];
+  cols.forEach((col, i) => {
+    const cards = $$('.card', col);
+    const to = i === last ? 0 : i + 1;
+    if (i === last && cards.length < 4) return;      // let DONE fill before recycling
+    cards.forEach(card => pool.push({ card, to, w: cards.length }));
+  });
+  if (!pool.length) return;
+  const total = pool.reduce((s, p) => s + p.w, 0);
+  let r = Math.random() * total, pick = pool[0];
+  for (const p of pool) { r -= p.w; if (r <= 0) { pick = p; break; } }
+  const drop = $('.drop', cols[pick.to]);
+  moveCard(pick.card, drop, drop.firstElementChild);
+}
+
+(function schedule() {
+  autoT = setTimeout(() => { if (canAuto()) autoMove(); schedule(); }, 3000 + Math.random() * 1900);
+})();
+
+/* ── drag ──────────────────────────────────────────── */
+function dropUnder(x, y) {
+  let best = null, bd = Infinity;
+  $$('.col', board).forEach(col => {
+    const r = col.getBoundingClientRect();
+    const cx = Math.max(r.left, Math.min(x, r.right));
+    const cy = Math.max(r.top,  Math.min(y, r.bottom));
+    const d = Math.hypot(x - cx, y - cy);
+    if (d < bd) { bd = d; best = $('.drop', col); }
+  });
+  return bd < 420 ? best : null;
+}
+
+function slotIn(drop, y, card) {
+  for (const c of $$('.card', drop)) {
+    if (c === card) continue;
+    const r = c.getBoundingClientRect();
+    if (y < r.top + r.height / 2) return c;
+  }
+  return null;
+}
+
+board.addEventListener('pointerdown', e => {
+  if (e.button) return;
+  const card = e.target.closest('.card');
+  if (!live || !card || e.target.closest('.sess')) return;
+
+  const sx = e.clientX, sy = e.clientY;
+  const rect = card.getBoundingClientRect();
+  const ox = sx - rect.left, oy = sy - rect.top;
+  let started = false, ghost = null, raf = 0, px = sx, py = sy, lastX = sx, vx = 0;
+
+  // One frame = read layout, then write. Pointer events only record where the
+  // finger is; hit-testing in the handler would force a reflow per event.
+  const loop = () => {
+    raf = requestAnimationFrame(loop);
+
+    // reads
+    const drop = dropUnder(px, py);
+    const before = drop ? slotIn(drop, py, card) : null;
+    const moved = drop && (card.parentElement !== drop || card.nextElementSibling !== before);
+
+    // writes
+    vx = vx * .78 + (px - lastX) * .22;
+    lastX = px;
+    const tilt = Math.max(-9, Math.min(9, vx * 1.15));
+    ghost.style.transform = `translate(${px - ox}px,${py - oy}px) rotate(${tilt.toFixed(2)}deg)`;
+    $$('.drop', board).forEach(d => d.classList.toggle('over', d === drop));
+    if (moved) {
+      flip($$('.card', board).filter(c => c !== card), () => drop.insertBefore(card, before), { dur: 260 });
+      counts(board);
+    }
+  };
+
+  const move = ev => {
+    px = ev.clientX; py = ev.clientY;
+    if (!started) {
+      if (Math.hypot(px - sx, py - sy) < 5) return;
+      started = dragging = true;
+      hideHint();
+      ghost = card.cloneNode(true);
+      ghost.classList.add("dragghost");
+      ghost.style.width = rect.width + 'px';
+      ghost.style.transform = `translate(${px - ox}px,${py - oy}px)`;
+      document.body.append(ghost);
+      card.classList.add('dragging');
+      document.body.style.cursor = 'grabbing';
+      loop();
+    }
+    ev.preventDefault();
+  };
+
+  const up = () => {
+    removeEventListener('pointermove', move);
+    removeEventListener('pointerup', up);
+    removeEventListener('pointercancel', up);
+    if (!started) return;
+    cancelAnimationFrame(raf);
+    document.body.style.cursor = '';
+    $$('.drop', board).forEach(d => d.classList.remove('over'));
+    const done0 = () => { ghost.remove(); card.classList.remove('dragging'); dragging = false; };
+    if (RM.matches) { done0(); return; }
+    const dest = card.getBoundingClientRect();
+    const land = ghost.animate(
+      [{ transform: ghost.style.transform }, { transform: `translate(${dest.left}px,${dest.top}px) rotate(0deg)` }],
+      { duration: 210, easing: EASE, fill: 'forwards' }
+    );
+    const done = () => { ghost.remove(); card.classList.remove('dragging'); dragging = false; };
+    land.finished.then(done).catch(done);
+  };
+
+  addEventListener('pointermove', move, { passive: false });
+  addEventListener('pointerup', up);
+  addEventListener('pointercancel', up);
+});
+
+/* ── session line: click to copy ───────────────────── */
+document.addEventListener('click', e => {
+  const s = e.target.closest('.sess');
+  if (!s) return;
+  navigator.clipboard?.writeText(s.dataset.copy).catch(() => {});
+  s.classList.add('copied');
+  setTimeout(() => s.classList.remove('copied'), 1400);
+});
+
+/* ── section reveals ───────────────────────────────── */
+const revealIO = new IntersectionObserver(es => es.forEach(en => {
+  if (!en.isIntersecting) return;
+  en.target.classList.add('in');
+  revealIO.unobserve(en.target);
+}), { rootMargin: '0px 0px -10% 0px', threshold: .06 });
+$$('.rv, .rv-print, .rv-panel').forEach(el => revealIO.observe(el));
+
+const NARROW = matchMedia('(max-width: 620px)');
+
+/* ── agents: the terminal writes to the board ──────── */
+const term = $('#term');
+const mini = $('#mini');
+const miniHTML = mini.innerHTML;
+const cursor = document.createElement('i');
+cursor.className = 'tcur';
+
+function miniMove() {
+  const card = $('#mDoing .card');
+  const done = $('#mDone');
+  flip($$('.card', mini), () => done.prepend(card), { dur: 520 });
+  counts(mini);
+}
+function miniAdd() {
+  const el = document.createElement('article');
+  el.className = 'card arrive';
+  el.style.setProperty('--pc', '#FFB454');
+  el.innerHTML = '<h3>Write the changelog</h3><div class="meta"><span class="proj">Growth</span><span class="age">now</span></div>';
+  flip($$('.card', mini), () => $('#mDoing').prepend(el), { dur: 420 });
+  counts(mini);
+}
+
+const SCRIPT = [
+  { cls: 'p',  text: '$ ',   speed: 0 },
+  { cls: 'u',  text: 'claude\n', speed: 42 },
+  { cls: 'p',  text: '› ', speed: 0, wait: 380 },
+  { cls: 'u',  text: 'rate limiting shipped — move it to done, then add "write the changelog"\n', speed: 16 },
+  { cls: 'o',  text: '  ▸ reading the board\n', speed: 0, wait: 520 },
+  { cls: 'ok', text: '  ✓ Rate limiting for the API   → DONE\n',  speed: 0, wait: 620, run: miniMove },
+  { cls: 'ok', text: '  ✓ Write the changelog          → DOING\n', speed: 0, wait: 760, run: miniAdd },
+  { cls: 'o',  text: '  2 changes on the board\n', speed: 0, wait: 460 },
+];
+
+let playing = false, termOn = false;
+new IntersectionObserver(es => { termOn = es[0].isIntersecting; if (termOn) play(); }, { threshold: .35 }).observe(term);
+
+async function play() {
+  if (playing) return;
+  playing = true;
+  while (termOn) {
+    term.textContent = '';
+    mini.innerHTML = miniHTML;
+    term.append(cursor);
+    if (RM.matches) {
+      SCRIPT.forEach(s => { const n = document.createElement('span'); n.className = s.cls; n.textContent = s.text; term.insertBefore(n, cursor); s.run?.(); });
+      playing = false; return;
+    }
+    for (const step of SCRIPT) {
+      if (!termOn) break;
+      if (step.wait) await sleep(step.wait);
+      const n = document.createElement('span');
+      n.className = step.cls;
+      term.insertBefore(n, cursor);
+      if (!step.speed) n.textContent = step.text;
+      else for (const ch of step.text) { n.textContent += ch; await sleep(step.speed); }
+      step.run?.();
+    }
+    await sleep(5200);
+  }
+  playing = false;
+}
+
+/* ── report: ticks itself ──────────────────────────── */
+const rows = $$('#repbody .reprow');
+const repcount = $('#repcount');
+const SHIPPED = [0, 2, 3];   // only the cards that ended in DONE
+const LAST = 3;              // the one the pointer ticks itself
+const AUTO = [0, 2];         // already ticked by the time you look
+function repSync() {
+  const n = rows.filter(r => r.classList.contains('on')).length;
+  repcount.textContent = n + ' selected';
+}
+rows.forEach((r, i) => r.addEventListener('click', () => { r.classList.toggle('on'); repSync(); }));
+
+/* <details> hides its content the instant `open` goes away, so the close never
+   animates on its own. Take over the toggle; without JS it still opens, it just
+   snaps — which is the right way round for a progressive enhancement. */
+$$('.qa').forEach(d => {
+  const sum = d.querySelector('summary');
+  const body = d.querySelector('.qa-body');
+  sum.addEventListener('click', e => {
+    if (RM.matches) return;
+    e.preventDefault();
+    if (d.open) {
+      body.style.gridTemplateRows = '0fr';
+      body.addEventListener('transitionend', () => {
+        d.open = false;
+        body.style.gridTemplateRows = '';
+      }, { once: true });
+    } else {
+      d.open = true;
+      body.style.gridTemplateRows = '0fr';
+      requestAnimationFrame(() => { body.style.gridTemplateRows = '1fr'; });
+      body.addEventListener('transitionend', () => { body.style.gridTemplateRows = ''; }, { once: true });
+    }
+  });
+});
+
+/* the markdown pane is a RESULT, so it has to be produced, not just sit there */
+const repwrap = $('.repwrap');
+const copyBtn = $('#repcopy');
+const copyLbl = $('#repcopylbl');
+const mdPane  = $('#mdpane');
+const mdAll   = $$('.mdl', mdPane);
+const mdLines = mdAll.filter(l => !l.classList.contains('sp'));
+const ptr     = $('#ptr');
+const CURSOR  = !RM.matches && !NARROW.matches;   // no mouse pointer on a phone
+
+// hide the output only if we are actually going to produce it
+if (CURSOR) mdLines.forEach(l => (l.style.opacity = '0'));
+
+function fillMarkdown(after = 0) {
+  mdLines.forEach((l, i) => {
+    const a = l.animate(
+      [{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 360, delay: after + i * 85, easing: EASE, fill: 'both' }
+    );
+    a.finished.then(() => { a.cancel(); l.style.opacity = ''; }).catch(() => {});
+  });
+}
+
+// the button's own shape pushing outward — not a ring drawn over the panel
+function ripple(b, to = 1.45, radius = 6) {
+  const wrap = repwrap.getBoundingClientRect();
+  const r = document.createElement('span');
+  r.className = 'ripple';
+  r.style.left   = (b.left - wrap.left) + 'px';
+  r.style.top    = (b.top  - wrap.top)  + 'px';
+  r.style.width  = b.width  + 'px';
+  r.style.height = b.height + 'px';
+  r.style.borderRadius = radius + 'px';
+  repwrap.append(r);
+  const a = r.animate([{ transform: 'scale(1)', opacity: .8 }, { transform: `scale(${to})`, opacity: 0 }],
+    { duration: 540, easing: EASE });
+  a.finished.then(() => r.remove()).catch(() => r.remove());
+}
+
+/* pointer helpers: a hand arcs, and it visibly presses before anything reacts */
+function ptrAt(el, fx = .5, fy = .55) {
+  const wrap = repwrap.getBoundingClientRect(), b = el.getBoundingClientRect();
+  return { x: b.left - wrap.left + b.width * fx, y: b.top - wrap.top + b.height * fy };
+}
+let ptrPos = { x: 0, y: 0 };
+function ptrMove(to, dur, lead = 'y') {
+  const from = ptrPos;
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const mid = lead === 'y'
+    ? { x: from.x + dx * .30, y: from.y + dy * .85 }
+    : { x: from.x + dx * .85, y: from.y + dy * .30 };
+  ptrPos = to;
+  return ptr.animate([
+    { transform: `translate(${from.x}px,${from.y}px)` },
+    { transform: `translate(${mid.x}px,${mid.y}px)`, offset: .55 },
+    { transform: `translate(${to.x}px,${to.y}px)` }
+  ], { duration: dur, easing: 'cubic-bezier(.42,.02,.22,1)', fill: 'forwards' }).finished;
+}
+async function ptrPress() {
+  ptr.firstElementChild.animate(
+    [{ transform: 'scale(1)' }, { transform: 'scale(.78)' }, { transform: 'scale(1)' }],
+    { duration: 230, easing: EASE }
+  );
+  await sleep(70);
+}
+
+function press() {
+  copyBtn.classList.add('pressed');
+  ripple(copyBtn.getBoundingClientRect());
+  setTimeout(() => copyBtn.classList.remove('pressed'), 150);
+  copyLbl.textContent = '✓ Copied';
+  setTimeout(() => { copyLbl.textContent = 'Copy markdown'; }, 2600);
+}
+
+// a real click really copies — every other demo on this page is real too
+copyBtn.addEventListener('click', () => {
+  navigator.clipboard?.writeText(mdAll.map(l => l.textContent).join('\n')).catch(() => {});
+  press();
+  fillMarkdown(60);
+});
+
+// tick the last one, THEN copy — the count is the through-line: 2 → 3 → copied
+async function demoCopy() {
+  const box  = rows[LAST].querySelector('.tickbox');
+  const stop = ptrAt(box, .5, .5);
+  ptrPos = { x: stop.x - 46, y: stop.y + 104 };          // enters from below left
+
+  ptr.style.transform = `translate(${ptrPos.x}px,${ptrPos.y}px)`;
+  ptr.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 260, easing: EASE, fill: 'both' });
+  await ptrMove(stop, 720, 'x');
+
+  await sleep(190);
+  await ptrPress();
+  rows[LAST].classList.add('on');
+  repSync();
+  ripple(box.getBoundingClientRect(), 2.1, 4);
+
+  await sleep(560);
+  await ptrMove(ptrAt(copyBtn, .40, .52), 640, 'y');
+
+  await sleep(190);
+  await ptrPress();
+  press();
+  fillMarkdown(120);
+
+  await sleep(1500);
+  ptr.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 420, easing: EASE, fill: 'forwards' });
+}
+
+const repOnce = new IntersectionObserver(es => {
+  if (!es[0].isIntersecting) return;
+  repOnce.disconnect();
+  const step = RM.matches ? 0 : 420;
+  (CURSOR ? AUTO : SHIPPED).forEach((idx, k) =>
+    setTimeout(() => { rows[idx].classList.add('on'); repSync(); }, step && step + k * 230));
+  if (CURSOR) setTimeout(demoCopy, 1400);
+}, { threshold: .4 });
+repOnce.observe($('#repbody'));
+
+})();
+</script>
+</body>
+</html>

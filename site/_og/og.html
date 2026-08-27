@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><style>
+:root{
+  --bg:#131218; --bg-2:#17161E; --surface:#1C1B24; --raise:#23222D;
+  --line:#2E2C3A; --line-hi:#413E51; --text:#EFECF4; --muted:#9A94A8; --faint:#6A6579;
+  --accent:#FFB454;
+  --ui:"Avenir Next",Avenir,-apple-system,system-ui,sans-serif;
+  --mono:"SF Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0}
+body{
+  width:1200px;height:630px;overflow:hidden;background:var(--bg);color:var(--text);
+  font-family:var(--ui);-webkit-font-smoothing:antialiased;position:relative;
+}
+body::before{
+  content:'';position:absolute;inset:0;
+  background:radial-gradient(90% 120% at 8% 0%, var(--bg-2), transparent 62%);
+}
+.wrap{position:relative;height:100%;display:grid;grid-template-columns:520px 1fr;gap:0}
+.left{padding:52px 0 52px 62px;display:flex;flex-direction:column}
+.mid{margin:auto 0}
+.brand{display:flex;align-items:center;gap:11px;font:500 19px/1 var(--mono);letter-spacing:.01em}
+.brand i{width:7px;height:20px;border-radius:1px;background:var(--accent);display:block}
+h1{
+font-weight:500;font-size:56px;line-height:1.04;letter-spacing:-.034em;
+}
+.facts{
+  margin-top:26px;font:500 15px/1 var(--mono);letter-spacing:.13em;color:var(--faint);
+}
+.facts b{color:var(--accent);font-weight:500}
+
+/* the product itself, bleeding off the right edge */
+.frame{
+  align-self:center;margin:0 -74px 0 26px;
+  border:1px solid var(--line);border-top-left-radius:16px;border-bottom-left-radius:16px;
+  background:linear-gradient(180deg,var(--bg-2),var(--bg));overflow:hidden;
+  box-shadow:0 30px 90px -30px rgba(0,0,0,.9);
+}
+.rail{height:46px;display:flex;align-items:center;gap:16px;padding:0 20px;border-bottom:1px solid var(--line);
+  font:500 12px/1 var(--mono);letter-spacing:.14em;color:var(--faint)}
+.dots{display:flex;gap:7px}.dots i{width:9px;height:9px;border-radius:50%;background:var(--line-hi)}
+.chip{display:flex;align-items:center;gap:7px}.chip i{width:6px;height:6px;border-radius:50%;background:var(--pc)}
+.all{color:var(--text);background:var(--raise);padding:6px 11px;border-radius:20px}
+.cols{display:grid;grid-template-columns:repeat(3,244px);gap:16px;padding:20px}
+.ch{display:flex;gap:9px;padding:0 4px 12px;font:500 12px/1 var(--mono);letter-spacing:.18em;color:var(--muted)}
+.ch b{color:var(--faint);font-weight:400}
+.card{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  padding:12px 14px 12px 16px;margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.card::before{content:'';position:absolute;left:0;top:10px;bottom:10px;width:2px;border-radius:2px;background:var(--pc)}
+.card h3{font:500 15px/1.35 var(--ui)}
+.meta{display:flex;align-items:baseline;margin-top:6px;font:400 13px/1 var(--ui)}
+.meta .p{color:var(--pc)}.meta .a{margin-left:auto;font:400 12px/1 var(--mono);color:var(--faint)}
+.sess{display:flex;align-items:center;gap:7px;margin-top:10px;background:var(--raise);border:1px solid var(--line);
+  border-radius:7px;padding:7px 9px;font:400 12px/1 var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden}
+.sess i{color:var(--accent);font-style:normal}
+</style></head><body>
+<div class="wrap">
+  <div class="left">
+    <div class="brand"><i></i>kanban.page</div>
+    <div class="mid">
+      <h1>A simple kanban<br>for everything<br>you&rsquo;re working on.</h1>
+      <p class="facts"><b>FREE</b> &nbsp;·&nbsp; NO ACCOUNT &nbsp;·&nbsp; WORKS OFFLINE</p>
+    </div>
+  </div>
+
+  <div class="frame">
+    <div class="rail">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="all">ALL</span>
+      <span class="chip" style="--pc:#6FA8FF"><i></i>Website</span>
+      <span class="chip" style="--pc:#4FD1A5"><i></i>API</span>
+      <span class="chip" style="--pc:#FFB454"><i></i>Growth</span>
+    </div>
+    <div class="cols">
+      <div>
+        <div class="ch">INBOX <b>3</b></div>
+        <div class="card" style="--pc:#FFB454"><h3>Draft the launch post</h3><div class="meta"><span class="p">Growth</span><span class="a">2d</span></div></div>
+        <div class="card" style="--pc:#6FA8FF"><h3>Refresh the pricing page</h3><div class="meta"><span class="p">Website</span><span class="a">3d</span></div></div>
+        <div class="card" style="--pc:#4FD1A5"><h3>Review PR #412</h3><div class="meta"><span class="p">API</span><span class="a">4d</span></div></div>
+      </div>
+      <div>
+        <div class="ch">DOING <b>2</b></div>
+        <div class="card" style="--pc:#4FD1A5"><h3>Rate limiting for the API</h3><div class="meta"><span class="p">API</span><span class="a">2d</span></div>
+          <div class="sess"><i>&#9656;</i>claude --resume 7f3a9c12&hellip;</div></div>
+        <div class="card" style="--pc:#FFB454"><h3>Onboarding email sequence</h3><div class="meta"><span class="p">Growth</span><span class="a">1d</span></div></div>
+      </div>
+      <div>
+        <div class="ch">DONE <b>2</b></div>
+        <div class="card" style="--pc:#6FA8FF"><h3>Onboarding tour v2</h3><div class="meta"><span class="p">Website</span><span class="a">1d</span></div></div>
+        <div class="card" style="--pc:#56C8E0"><h3>Postgres 16 upgrade</h3><div class="meta"><span class="p">Ops</span><span class="a">3d</span></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>

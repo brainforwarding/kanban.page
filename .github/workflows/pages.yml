@@ -25,9 +25,17 @@ jobs:
       - uses: actions/configure-pages@v5
       - name: Stage static site
         run: |
-          mkdir _site
-          rsync -a --exclude .git --exclude _site ./ _site/
-          sed -i "s/__BUILD_ID__/${{ github.sha }}/g" _site/sw.js
+          # the marketing page is the root; the app lives under /app/ so its
+          # service worker scopes to /app/ and never touches the landing page
+          mkdir -p _site/app
+          rsync -a --exclude .git --exclude _site --exclude site \
+                --exclude docs --exclude tests --exclude .github \
+                --exclude CNAME --exclude README.md --exclude CLAUDE.md \
+                ./ _site/app/
+          sed -i "s/__BUILD_ID__/${{ github.sha }}/g" _site/app/sw.js
+          cp site/index.html _site/index.html
+          cp site/_og/og-kanban-page.png _site/og.png
+          cp CNAME _site/CNAME
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
