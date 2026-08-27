@@ -508,16 +508,25 @@ h1,h2,h3,p{margin:0}
 }
 .qa-body > p > span{display:block;padding:0 0 20px}
 .qa-body code{font:400 13.5px/1 var(--mono);color:var(--accent)}
+.qa-body a{color:var(--text);border-bottom:1px solid var(--line-hi);padding-bottom:1px;
+  transition:color .2s var(--ease), border-color .2s var(--ease)}
+.qa-body a:hover{color:var(--accent);border-color:var(--accent-dim)}
 
 /* a third tier on purpose: it sits after the ask, it never competes with it */
+.afters{
+  display:flex;justify-content:center;align-items:center;gap:4px;
+  flex-wrap:wrap;margin-top:24px;
+}
 .share{
-  display:inline-flex;align-items:center;gap:9px;margin-top:24px;
+  display:inline-flex;align-items:center;gap:9px;
   font:500 11px/1 var(--mono);letter-spacing:.12em;color:var(--faint);
   padding:9px 13px;border-radius:7px;
   transition:color .2s var(--ease), background .2s var(--ease);
 }
 .share:hover{color:var(--text);background:var(--raise)}
 .share svg{width:12px;height:12px;fill:currentColor;flex:none}
+/* a solid cup is a blob at 12px; only the outline reads as a cup */
+.share svg.cup{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 
 /* ── who uses it ─────────────────────────────────────── */
 
@@ -799,11 +808,18 @@ h1,h2,h3,p{margin:0}
       <a class="btn primary" href="https://kanban.page/app/">Open the board</a>
     </div>
     <p class="fineprint rv" style="--d:.12s">opens in about a second &nbsp;·&nbsp; stays in your browser</p>
-    <a class="share rv" style="--d:.18s" target="_blank" rel="noopener"
-       href="https://x.com/intent/post?text=A%20simple%20kanban%20for%20everything%20you%27re%20working%20on.%20Free%2C%20offline%2C%20no%20account%20%E2%80%94%20and%20your%20coding%20agent%20can%20edit%20it%20too.&url=https%3A%2F%2Fkanban.page%2F">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
-      share it
-    </a>
+    <div class="afters rv" style="--d:.18s">
+      <a class="share" target="_blank" rel="noopener"
+         href="https://x.com/intent/post?text=A%20simple%20kanban%20for%20everything%20you%27re%20working%20on.%20Free%2C%20offline%2C%20no%20account%20%E2%80%94%20and%20your%20coding%20agent%20can%20edit%20it%20too.&url=https%3A%2F%2Fkanban.page%2F">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+        share it
+      </a>
+      <a class="share" target="_blank" rel="noopener"
+         href="https://buymeacoffee.com/sebasonearth">
+        <svg class="cup" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8z"/><path d="M17 10h1.4a2.6 2.6 0 0 1 0 5.2H17"/></svg>
+        buy me a coffee
+      </a>
+    </div>
   </div>
 </section>
 
@@ -817,7 +833,7 @@ h1,h2,h3,p{margin:0}
         <div class="qa-body"><p><span>In your browser, on this machine. There is no server to send it to.</span></p></div>
       </details>
       <details class="qa"><summary>Is it really free?<i></i></summary>
-        <div class="qa-body"><p><span>Yes. MIT licensed. There is no paid version.</span></p></div>
+        <div class="qa-body"><p><span>Yes. MIT licensed, and there is no paid version &mdash; nothing here will ever sit behind a payment. If it earns a place in your week, you can <a href="https://buymeacoffee.com/sebasonearth" target="_blank" rel="noopener">buy me a coffee</a>.</span></p></div>
       </details>
       <details class="qa"><summary>Does it work offline?<i></i></summary>
         <div class="qa-body"><p><span>Yes, after the first visit. Install it to your dock and it opens like an app.</span></p></div>
