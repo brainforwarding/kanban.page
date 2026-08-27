@@ -12,7 +12,7 @@ networked board data is introduced.
 - GitHub Pages publishes a staged static build on each push to `main`. The
   workflow stamps the commit SHA into the service worker cache revision, so
   every deployed app change is discoverable as an update.
-- The canonical URL is `https://brainforwarding.github.io/kanban.html/`.
+- The canonical URL is `https://kanban.page/app/`.
 - A web app manifest makes the site installable.
 - A service worker precaches the app shell (`index.html`, `styles.css`,
   `core.js`, and `app.js`) so an already visited board opens offline.

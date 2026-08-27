@@ -27,12 +27,12 @@ in the repo, so a coding agent lands oriented instead of guessing.
 
 To publish your fork as your own board:
 
-1. [Fork the repository](https://github.com/brainforwarding/kanban.html/fork).
+1. [Fork the repository](https://github.com/brainforwarding/kanban.page/fork).
 2. In your fork: **Settings → Pages → Source: GitHub Actions**.
 3. In your fork: the **Actions** tab → enable workflows, then push any commit
    (or run **Deploy GitHub Pages** by hand).
 
-Your board is then at `https://<you>.github.io/kanban.html/app/` — installable,
+Your board is then at `https://<you>.github.io/kanban.page/app/` — installable,
 offline-capable, and self-updating, with your changes in it.
 
 ## Web app, offline use, and updates
