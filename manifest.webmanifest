@@ -1,6 +1,6 @@
 {
-  "name": "board",
-  "short_name": "board",
+  "name": "kanban.page",
+  "short_name": "kanban.page",
   "description": "A private, local kanban board.",
   "start_url": "./",
   "scope": "./",

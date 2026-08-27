@@ -78,7 +78,7 @@ function load() {
 
 function applyLocale() {
   document.documentElement.lang = locale;
-  document.title = 'board';
+  document.title = 'kanban.page';
   $('#q').placeholder = tr('search');
   $('#reportBtn').title = `${tr('report')}  R`;
   $('#newTask').title = `${tr('newTask')}  N`;
