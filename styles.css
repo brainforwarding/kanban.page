@@ -1332,36 +1332,200 @@ button[disabled] { opacity: .4; pointer-events: none; }
    ".pill.add", ".pill.flagpill", ".icon.sm" and
    "[data-density=compact] .chip" are the other (0,2,0) rules that bite. */
 
-/* ── input: coarse pointer ─────────────────────────────── */
-@media (pointer: coarse) {
-  /* touch-action: none on a card meant a swipe that began on one neither
-     scrolled nor paged — and cards cover ~90% of a column, so a column taller
-     than the screen was unreachable. Hand both axes back to the browser; the
-     app takes the gesture only after a hold (see the pointerdown handler). */
-  .card { touch-action: pan-x pan-y; }
+/* ── input: no hover ───────────────────────────────────── */
+/* A finger never hovers, so every control a mouse reveals on :hover simply
+   does not exist on a phone — and worse, opacity:0 still hit-tests, so they
+   were invisible AND live. Two taps at the coordinates of an unseen button
+   permanently deleted an archived task. These keep exactly the weight a mouse
+   user sees mid-hover: nothing new appears, it just stops disappearing, and no
+   layout moves. */
+@media (hover: none) {
+  .col .grab            { opacity: .45; }
+  .col-head .icon       { opacity: .5; }
+  .prow .grab           { opacity: .5; }
+  .prow .icon           { opacity: .5; }
+  .card .flag           { opacity: .4; }
+  .chip .ci             { opacity: .55; }
+
+  /* The archive is the only place in the app that deletes. Restore was
+     unreachable and Delete was invisible but live, which inverts the whole
+     point of a two-step confirm. Three text controls plus a title do not fit
+     340px at 44px each, so the actions take their own line. */
+  .arow                 { flex-wrap: wrap; row-gap: 6px; }
+  .arow .atext          { flex: 1 0 calc(100% - 10px); }
+  .arow .ghost.sm       { opacity: 1; }
+  .arow [data-restore]  { margin-left: auto; }
+  .arow .ghost.danger:not(.armed) { color: var(--faint); }
 }
 
-/* ── input: no hover ───────────────────────────────────── */
+/* Hover feedback must not latch on a touchscreen: iOS leaves :hover stuck on
+   the last-tapped element, so a merely-touched pill wore the pressed wash. */
+@media (hover: hover) {
+  .pill:hover { color: var(--text); background: var(--raise); }
+  .icon:hover { color: var(--text); background: var(--raise); }
+}
+@media (hover: none) {
+  .pill:active { background: var(--raise-hi); }
+  .icon:active { background: var(--raise); }
+}
+
+/* ── input: coarse pointer ─────────────────────────────── */
+/* 44px minimum. Every selector here matches or beats its competitor: a media
+   query adds no specificity, and .pill.add (:193), .pill.flagpill (:198),
+   .icon.sm (:253) and [data-density="compact"] .chip (:547) all out-specify a
+   bare .pill / .icon / .chip — a naive `.pill { padding }` would size every
+   pill EXCEPT ★ and +, the two smallest targets in the app. */
+@media (pointer: coarse) {
+  /* touch-action: none on a card meant a swipe beginning on one neither
+     scrolled nor paged, and cards cover ~90% of a column. Both axes go back to
+     the browser; the app takes the gesture only after a hold. */
+  .card { touch-action: pan-x pan-y; }
+  .card .flag { width: 30px; height: 30px; }
+  .card .flag::after { content: ""; position: absolute; inset: -8px; }
+
+  .col-head { height: 44px; }
+  .col .grab, .col-head .icon.sm { width: 44px; height: 44px; }
+
+  .filters { height: 44px; }
+  /* vertical only: pills sit 6px apart, so horizontal slop would overlap and
+     a tap meant for one project would sometimes select its neighbour */
+  .pill { position: relative; }
+  .pill::after { content: ""; position: absolute; inset: -8.5px 0; }
+  .pill.add { padding: 0 17px; }
+  .pill.flagpill { padding: 0 14px; }
+
+  .tools .icon { width: 44px; height: 44px; }
+  .search { height: 44px; }
+
+  .panel-head .icon { width: 44px; height: 44px; }
+  .prow { padding: 6px 4px; }
+  .prow .grab { width: 32px; height: 44px; display: grid; place-items: center; }
+  .prow .icon { width: 44px; height: 44px; }
+  .prow .swatch { position: relative; }
+  .prow .swatch::after { content: ""; position: absolute; inset: -16px; }
+  .prow .palette button { position: relative; }
+  .prow .palette button::after { content: ""; position: absolute; inset: -14px -8px; }
+
+  .ghost.sm { height: 44px; padding: 0 12px; }
+  .sheet-foot .ghost, .sheet-foot .primary { height: 44px; }
+  .flagbtn { width: 44px; height: 44px; }
+  .rep-head .icon.sm, .sheet-head .icon.sm { width: 44px; height: 44px; flex: none; }
+  .ghost.danger, .panel-foot .primary { min-height: 44px; }
+  /* the day stamp is also the re-date control; keep its 10.5px mono type and
+     grow only what the finger lands on */
+  .rep-row .rd { position: relative; }
+  .rep-row .rd::after { content: ""; position: absolute; inset: -7px -10px; }
+  .wk { min-height: 44px; }
+  .rep-row .rd { min-height: 32px; }
+  .seg button { min-height: 44px; }
+  .chooser .pill { height: 44px; }
+  .menu > button, #languageChoices button, .menu.weeks button { min-height: 44px; }
+  .toast button { min-height: 44px; }
+
+  /* below 16px iOS zooms the page on focus and never zooms back */
+  .prow input, .panel-foot input, .composer textarea, .cmd-input input { font-size: 16px; }
+  .prow input, .panel-foot input { min-height: 44px; }
+
+  /* the browser's default flash is cyan; this board's only accent is amber */
+  button, .card, .chip { -webkit-tap-highlight-color: transparent; }
+  .card:active { background: var(--raise); }
+}
+
+/* ── device chrome ─────────────────────────────────────── */
+/* index.html asks for viewport-fit=cover and the manifest is standalone, so an
+   installed board draws under the notch and the home indicator — but env() was
+   used nowhere. The rail sat under the status bar and every footer sat in the
+   home-indicator strip. env() is 0 with no inset, so this needs no media query. */
+.rail  { height: calc(52px + env(safe-area-inset-top, 0px)); padding-top: env(safe-area-inset-top, 0px); }
+.board { height: calc(100dvh - 52px - env(safe-area-inset-top, 0px)); }
+.panel { padding-top: env(safe-area-inset-top, 0px); }
+.panel-body { overscroll-behavior: contain; }
+.panel-foot { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+.sheet-foot { padding-bottom: calc(13px + env(safe-area-inset-bottom, 0px)); }
+.toast { bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
+.rep-body, .menu { overscroll-behavior: contain; }
+
+/* base, not phone-specific: a stage name used to wrap to three lines inside a
+   30px header and land on top of the first card */
+.col-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.col-head .icon { flex: none; }
 
 /* ── space ─────────────────────────────────────────────── */
 @media (max-width: 640px) {
-  .rail { gap: 10px; padding: 0 10px; }
+  .rail { gap: 10px; padding-left: 10px; padding-right: 10px; }
   .brand { display: none; }
-  .search { width: 34px; padding: 0 10px; }
-  .search:focus-within { width: 160px; }
-  .board { gap: 10px; padding: 14px 10px 16px; }
-  .update-notice { right: 10px; bottom: 10px; }
-  .menu { right: 10px; max-width: calc(100vw - 20px); max-height: calc(100dvh - 64px); overflow-y: auto; }
-  .col { width: min(84vw, var(--col-w)); }
 
-  /* The route is board mechanics, and the tense heading already says which
-     side of the done line a card ended on — the most redundant thing in the
-     row, at exactly the width where the title has nothing to spare. */
+  /* The chip row scrolls, but its one-sided mask claimed there was more to the
+     right even at the end, and never admitted there was anything to the left.
+     Fade both edges so the row tells the truth about where it is, and snap so a
+     swipe rests on a chip boundary instead of mid-word. */
+  .filters {
+    scroll-snap-type: x proximity;
+    mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 22px), transparent);
+  }
+  .filters .pill { scroll-snap-align: start; }
+  .search { width: 44px; padding: 0; justify-content: center; overflow: hidden; }
+  .search input { width: 0; padding: 0; }
+  .search:focus-within { width: 190px; padding: 0 12px; justify-content: flex-start; }
+  .search:focus-within input { width: 100%; }
+  .search:focus-within { width: 160px; }
+  .board { gap: 10px; padding: 14px 10px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .update-notice { right: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .menu { right: 10px; max-width: calc(100vw - 20px); max-height: calc(100dvh - 64px); overflow-y: auto; }
+  .menu button kbd { display: none; }          /* no keyboard to hint at */
+
+  /* One stage per screen, with a sliver of the next. The sliver is functional,
+     not decorative: the drop target is chosen by pointer x against the column
+     rect, so it is what lets you carry a held card into the next stage in one
+     gesture. State the size as `flex`, never `width` — `width` can never win
+     on a flex main axis while shrink is on, which is why `width: min(84vw, …)`
+     measured 272px. The (0,3,0) selector is deliberate:
+     [data-density="compact"] .col:not(.ghost-col) (:540) outranks a bare .col
+     and would keep its 248px floor alive on a small phone. */
+  .board { scroll-snap-type: x mandatory; scroll-padding-inline: 10px; }
+  .board > .col:not(.ghost-col) {
+    flex: 0 0 min(var(--col-w), calc(100vw - 96px));
+    min-width: 0;
+    max-width: none;
+  }
+  /* a 22px invisible target parked three screens to the right is not an
+     affordance; "Add stage" already lives in the ⋯ menu, which app.js calls
+     its real home */
+  .col.ghost-col { display: none; }
+
   .rep-row .rf { display: none; }
 
-  /* .wide has to be named or it wins on specificity and the sheet stretches
-     between its own top and this bottom. Flex plus a cap makes the sheet hug
-     its content and keeps the footer reachable however long the list runs. */
+  /* The title had 107px — about 14 characters — while the project and the day
+     stamp took 154. Give the title its own line and put the metadata beneath;
+     the tick spans both so the row still reads as one object. Costs row height
+     (34 → ~61px) and buys the whole title, which is the thing you are deciding
+     about when you tick it. */
+  .rep-row {
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr) auto;
+    grid-template-areas: "tick title title" "tick project day";
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 2px;
+    padding: 8px 10px;
+  }
+  .rep-row .tick { grid-area: tick; align-self: start; margin-top: 3px; }
+  .rep-row .rt   { grid-area: title; white-space: normal; overflow: hidden;
+                   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+  .rep-row .rp   { grid-area: project; max-width: none; justify-self: start; }
+  .rep-row .rd   { grid-area: day; justify-self: end; }
+  .rep-row input[type="date"] { grid-area: day; justify-self: end; }
+
+  /* four controls needing 479px in 388px: status on one line, the two export
+     verbs sharing the next. The existing .grow span becomes the line break, so
+     the markup is untouched. */
+  #report .sheet-foot { flex-wrap: wrap; row-gap: 10px; }
+  #report .sheet-foot .grow  { flex: 1 0 100%; height: 0; order: 3; }
+  #report .sheet-foot .count { order: 2; margin-left: auto; }
+  #rep-all  { order: 1; }
+  #rep-copy { order: 4; flex: 1 1 0; }
+  #rep-save { order: 5; flex: 1 1 0; }
+
   .sheet, .sheet.wide {
     top: auto;
     bottom: 0;
@@ -1371,9 +1535,9 @@ button[disabled] { opacity: .4; pointer-events: none; }
     flex-direction: column;
     border-radius: 16px 16px 0 0;
   }
-  /* shrink, never grow: a two-row report is not a full-height sheet */
   .sheet .rep-body, .sheet .sheet-body { flex: 0 1 auto; min-height: 0; }
-  .sheet .rep-body { max-height: none; overflow-y: auto; }
+  .sheet .rep-body, .sheet .sheet-body { max-height: none; overflow-y: auto; }
+  .sheet-head { display: flex; justify-content: flex-end; padding: 8px 8px 0; }
 
   @keyframes sheetIn {
     from { opacity: 0; transform: translateX(-50%) translateY(18px) }

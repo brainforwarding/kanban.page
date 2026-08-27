@@ -64,8 +64,53 @@ The modal shows the route (`from → to`) precisely because the export does not:
 ### Safety properties to preserve
 
 - **The board archives; only the archive deletes.** Nothing on the board is one click from gone; the single irreversible action lives in the archive behind a two-step confirm.
-- **Closing the quick composer = saving.** `closeComposer()` commits any typed text as a card; only Esc (`{ discard: true }`) throws a draft away.
+- **Closing a text surface = saving.** `closeComposer()` commits any typed text as a card, and closing the editor — including clicking outside it — calls `saveEditor()`. Only a deliberate gesture discards: Esc, or the editor's ✕. The editor used to do the opposite and destroy the draft silently, with no undo, because `undo()` restores board state and a draft was never in state.
 - **Damaged boards keep their event log** — the log is the only copy of the history (see migration tests).
+
+### Touch, and the three responsive axes
+
+The responsive layer is organised by **axis**, not by screen: `(hover: none)`
+and `(pointer: coarse)` are about the INPUT, `(max-width: 640px)` is about
+SPACE. Keep them apart — a sizing rule keyed to a width silently misses a touch
+laptop, and a reveal keyed to a width misses an iPad.
+
+**A media query adds no specificity.** `.sheet { top }` at (0,1,0) lost to
+`.sheet.wide` (0,2,0) while still winning `bottom`, and the box stretched
+between the two — 768px of sheet for 519px of content. The other (0,2,0) rules
+that beat a naive override: `.pill.add`, `.pill.flagpill`, `.icon.sm`,
+`[data-density="compact"] .chip`, and `[data-density="compact"] .col:not(.ghost-col)`
+at (0,3,0). Match or beat the competitor, or the rule half-applies.
+
+**`width` never wins on a flex main axis while shrink is on.** `.col` is
+`flex: 1 1 var(--col-w)`, so `width: min(84vw, …)` did nothing and columns
+measured 272px. State a flex size, not a width.
+
+**`opacity: 0` still hit-tests.** Every hover-gated control was invisible AND
+live on touch — two taps at an unseen button's coordinates deleted an archived
+task. Reveal under `(hover: none)` rather than leaving a landmine.
+
+**The gesture split.** A mouse can spend movement on a drag because the pointer
+was already somewhere before it pressed. A finger has one gesture and the
+scrollers need it, so on touch a card is lifted by holding still for 320ms and
+any earlier movement hands the gesture back to the browser. The 5px threshold
+keeps its value and inverts its meaning. The gate is `e.pointerType === 'touch'`
+— an explicit opt-in, so the suite's PointerEvents (which omit `pointerType`,
+defaulting to `""`) keep the unchanged mouse path.
+
+**A tap's compatibility click is hit-tested fresh**, after any scrim raised on
+`pointerup` is already up. That is why opening the editor used to close it
+again on touch, and why the scrim only closes on a click whose press also
+landed on it.
+
+**Verifying on a phone: bypass the service worker.** This ships as a PWA, and a
+reused Chrome profile will serve a cached `app.js` — a fix can measure as
+broken when it is fine. Use `Network.setBypassServiceWorker` plus
+`setCacheDisabled`, and set `Emulation.setDeviceMetricsOverride` BEFORE
+`setEmulatedMedia`, or the metrics override resets the emulated media.
+
+The DOM suite's iframe is 900x560 and headless reports `pointer: fine`, so the
+input axes never fire by default; the touch tests ask for `pointerType: 'touch'`
+explicitly and the layout test resizes the frame to 390px and restores it.
 
 ### Drag pattern (cards, stages, and project rows share it)
 

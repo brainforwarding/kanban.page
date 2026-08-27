@@ -1097,6 +1097,7 @@ function openEditor(id, colId) {
   fNotes.value = draft.notes || '';
   fSession.value = draft.session || '';
   $('#f-archive').style.visibility = t ? 'visible' : 'hidden';
+  $('#f-close').title = tr('discard');
   renderStage();
   renderProjectChooser();
   syncFlagBtn();
@@ -1186,6 +1187,8 @@ function closeEditor() {
 }
 
 $('#f-save').onclick = saveEditor;
+$('#f-close').innerHTML = ICON.close;
+$('#f-close').onclick = closeEditor;   // the deliberate discard, now labelled
 fFlag.onclick = () => { draft.flag = !draft.flag; syncFlagBtn(); popStar($('svg', fFlag), draft.flag); };
 $('#f-session-copy').onclick = async () => {
   if (!fSession.value.trim()) return;
@@ -1568,8 +1571,8 @@ $('#menuBtn').addEventListener('click', () => {
   const col = state.columns[state.columns.length - 1];
   const n = col ? state.tasks.filter(t => t.columnId === col.id && onBoard(t)).length : 0;
   $('#act-archive-last').textContent = col
-    ? `Archive ${col.name.toLowerCase()}${n ? ` (${n})` : ''}`
-    : 'Archive finished';
+    ? `${tr('archiveVerb')} ${col.name.toLowerCase()}${n ? ` (${n})` : ''}`
+    : tr('archiveFinished');
   $('#act-density').setAttribute('aria-pressed', String(state.density === 'compact'));
 });
 
@@ -1735,7 +1738,15 @@ scrim.addEventListener('pointerdown', () => { scrimPressed = true; });
 scrim.onclick = () => {
   if (!scrimPressed) return;
   scrimPressed = false;
-  closeEditor(); closeProjects(); closeReport(); closeArchive();
+  // Closing a text surface saves. The quick composer has always worked this
+  // way; the editor did the opposite and silently threw the draft away, with
+  // no undo — undo() restores board state, and a draft was never in state.
+  // On a phone the scrim is 57% of the screen and is also how you dismiss the
+  // keyboard, so the discard was one stray tap away. saveEditor() already
+  // bails to closeEditor() on an empty title, so an accidental open costs
+  // nothing. Esc and the ✕ remain the deliberate ways to throw work away.
+  if (!editor.hidden) saveEditor(); else closeEditor();
+  closeProjects(); closeReport(); closeArchive();
 };
 
 qInput.addEventListener('input', () => {

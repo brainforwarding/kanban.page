@@ -537,6 +537,106 @@ frame.addEventListener('load', async function run() {
       'the rightmost stage on screen is the one the report treats as done');
   });
 
+  /* ── touch and small screens ─────────────────────────
+     The iframe is 900x560 and headless reports pointer:fine, so none of the
+     three media axes fire here by default. These size the frame for the space
+     axis, and drive the input axis by asking for pointerType 'touch' — which
+     the helpers above deliberately never do, so the mouse path stays covered. */
+
+  const TP = (type, x, y, kind) => new W.PointerEvent(type, {
+    bubbles: true, clientX: x, clientY: y, button: 0, isPrimary: true, pointerType: kind,
+  });
+
+  await test('a click that did not press on the scrim does not close a panel', async () => {
+    await reset();
+    W.addTask({ title: 'Tap target' });
+    await sleep(40);
+    W.openEditor(W.__board.state.tasks[0].id);
+    await sleep(40);
+    // this is the shape of a tap's compatibility click: it lands on the scrim,
+    // which has just gone up, without ever having been pressed
+    D.getElementById('scrim').click();
+    await sleep(60);
+    eq(D.getElementById('editor').hidden, false, 'the editor survives the tap that opened it');
+    const s = D.getElementById('scrim');
+    s.dispatchEvent(TP('pointerdown', 20, 20, 'mouse'));
+    s.click();
+    await sleep(60);
+    eq(D.getElementById('editor').hidden, true, 'but a real press on the scrim still closes it');
+  });
+
+  await test('closing the editor from outside keeps what you typed; the x discards', async () => {
+    const t = W.__board.state.tasks[0];
+    W.openEditor(t.id);
+    await sleep(40);
+    D.getElementById('f-title').value = 'kept by closing';
+    const s = D.getElementById('scrim');
+    s.dispatchEvent(TP('pointerdown', 20, 20, 'mouse'));
+    s.click();
+    await sleep(220);
+    eq(W.__board.state.tasks[0].title, 'kept by closing', 'closing saves, like the composer');
+
+    W.openEditor(t.id);
+    await sleep(40);
+    D.getElementById('f-title').value = 'thrown away';
+    D.getElementById('f-close').click();
+    await sleep(220);
+    eq(W.__board.state.tasks[0].title, 'kept by closing', 'the x is the deliberate discard');
+  });
+
+  await test('a cancelled drag leaves no ghost and no stuck cursor', async () => {
+    await reset();
+    W.addTask({ title: 'Cancel me' });
+    await sleep(40);
+    const card = cards()[0];
+    const r = card.getBoundingClientRect();
+    card.dispatchEvent(TP('pointerdown', r.left + 40, r.top + 15, 'mouse'));
+    D.dispatchEvent(TP('pointermove', r.left + 80, r.top + 60, 'mouse'));
+    await sleep(30);
+    D.dispatchEvent(TP('pointercancel', r.left + 80, r.top + 60, 'mouse'));
+    await sleep(400);
+    eq(D.querySelectorAll('.card-ghost-wrap').length, 0, 'no ghost left behind');
+    eq(W.document.body.style.cursor, '', 'cursor released');
+    eq(W.document.body.style.userSelect, '', 'text selection released');
+    eq(D.getElementById('editor').hidden, true, 'a cancel is not a tap, so no editor');
+  });
+
+  await test('a finger scrolls unless it holds: moving early never lifts a card', async () => {
+    const card = cards()[0];
+    const r = card.getBoundingClientRect();
+    card.dispatchEvent(TP('pointerdown', r.left + 40, r.top + 15, 'touch'));
+    D.dispatchEvent(TP('pointermove', r.left + 40, r.top + 90, 'touch'));   // moved at once
+    await sleep(60);
+    eq(D.querySelectorAll('.card-ghost-wrap').length, 0, 'nothing lifted — that was a scroll');
+    D.dispatchEvent(TP('pointerup', r.left + 40, r.top + 90, 'touch'));
+    await sleep(60);
+
+    card.dispatchEvent(TP('pointerdown', r.left + 40, r.top + 15, 'touch'));
+    await sleep(400);                                                        // held past 320ms
+    eq(D.querySelectorAll('.card-ghost-wrap').length, 1, 'a hold lifts the card');
+    D.dispatchEvent(TP('pointerup', r.left + 40, r.top + 15, 'touch'));
+    await sleep(500);
+    eq(D.querySelectorAll('.card-ghost-wrap').length, 0, 'and the drop cleans up');
+  });
+
+  await test('at phone width the sheets hug their content instead of stretching', async () => {
+    const f = document.querySelector('iframe');
+    const w = f.style.width, h = f.style.height;
+    f.style.width = '390px'; f.style.height = '844px';
+    await sleep(120);
+    await openThisWeek();
+    const sheet = D.getElementById('report').getBoundingClientRect();
+    const foot = D.querySelector('#report .sheet-foot').getBoundingClientRect();
+    assert(W.matchMedia('(max-width: 640px)').matches, 'the space axis is live at 390px');
+    assert(sheet.bottom - foot.bottom < 4, `the footer sits at the foot of the sheet (gap ${Math.round(sheet.bottom - foot.bottom)}px)`);
+    assert(Math.round(sheet.width) === 390, `the sheet spans the viewport, not 100vw-32 (got ${Math.round(sheet.width)})`);
+    const rf = D.querySelector('.rep-row .rf');
+    if (rf) eq(getComputedStyle(rf).display, 'none', 'the route gives its width to the title');
+    W.closeReport();
+    f.style.width = w; f.style.height = h;
+    await sleep(120);
+  });
+
   /* ── done ───────────────────────────────────────────── */
 
   W.localStorage.removeItem('board.v2.test');

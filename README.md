@@ -96,7 +96,7 @@ node --test tests/core.test.js     # 65 unit tests, no dependencies
 They cover what is easy to get silently wrong: calendar dates across DST,
 Monday–Sunday boundaries across month and year ends, report aggregation,
 markdown output, and storage migration. Then open `tests/dom.test.html` in
-Chrome for 29 interaction tests — they drive the real app in an iframe and
+Chrome for 34 interaction tests — they drive the real app in an iframe and
 report pass/fail in the page title, against a `?ns=test` board that never
 touches your data.
 
