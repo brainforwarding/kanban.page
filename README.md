@@ -1,8 +1,7 @@
-# kanban.html
+# kanban.page
 
-A personal kanban with no build step, account, or backend. Use it at the hosted
-URL (installable and offline-capable after the first visit), or download it and
-open `index.html` in your browser.
+A personal kanban with no build step, account, or backend. It is one HTML file,
+served from a URL you can install to your dock and use offline.
 
 ![the board](docs/shots/board.png)
 
@@ -12,25 +11,29 @@ It looks and moves like a polished app because the details are tuned by hand: ca
 
 ## Use it your way
 
-- **Use the web app:** [brainforwarding.github.io/kanban.html](https://brainforwarding.github.io/kanban.html/)
+- **Use the web app:** [kanban.page](https://kanban.page/)
   is the canonical version. Visit it once online; you can then install it from
   your browser and use it offline. It offers **Update** (or **Actualizar** in
   Spanish) when a new version is ready.
-- **Run it locally:** clone or download this repository, then open
-  `index.html`. This remains fully private and offline, but you update it by
-  downloading newer files yourself.
-- **Make it yours:** [fork the repository](https://github.com/brainforwarding/kanban.html/fork)
-  on GitHub, change it however you like, and optionally publish your own fork
-  with GitHub Pages.
+- **Make it yours:** [fork it](#fork-it), change whatever you like, and publish
+  your fork with GitHub Pages — you get your own board at your own URL,
+  installable and self-updating just like this one.
 
-## Run locally in 30 seconds
+## Fork it
 
-```bash
-git clone https://github.com/brainforwarding/kanban.html.git   # or Code → Download ZIP
-open kanban.html/index.html                                    # macOS — or just double-click it
-```
+~3,500 lines of vanilla HTML/CSS/JS with no build step and no dependencies, so
+there is nothing to set up — edit a file, reload the page. There's a `CLAUDE.md`
+in the repo, so a coding agent lands oriented instead of guessing.
 
-That's it. The board lives in that browser's `localStorage`; nothing ever leaves your machine.
+To publish your fork as your own board:
+
+1. [Fork the repository](https://github.com/brainforwarding/kanban.html/fork).
+2. In your fork: **Settings → Pages → Source: GitHub Actions**.
+3. In your fork: the **Actions** tab → enable workflows, then push any commit
+   (or run **Deploy GitHub Pages** by hand).
+
+Your board is then at `https://<you>.github.io/kanban.html/app/` — installable,
+offline-capable, and self-updating, with your changes in it.
 
 ## Web app, offline use, and updates
 
@@ -38,18 +41,14 @@ The canonical web app is the URL above. Visit it once online, then install it
 from your browser's app/install menu if you like. It will open offline after
 that first visit. When a new version is published, the running app offers
 **Update** / **Actualizar**. Your cards remain in your browser — an update changes the app
-files, not your board data. The downloadable `file://` version remains
-supported, but cannot update itself; download a newer release to update it.
-
-Moving from a downloaded board to the web app is a one-time manual move:
-**Export backup** in the downloaded board, then **Import backup** on the web.
+files, not your board data.
 
 ## Make it feel like an app
 
 The board is happiest as its own window, pinned to your dock or taskbar:
 
 - **Chrome / Edge**: open the board, then **⋮ → Cast, save and share → Create shortcut…** (on some versions: *More tools → Create shortcut*), tick **Open as window**. You get a chromeless window and a dock icon.
-- Or launch it that way directly: `open -na "Google Chrome" --args --app="file:///path/to/board/index.html"` (macOS) / `chrome --app=file:///path/to/board/index.html` (Linux/Windows).
+- Or launch it that way directly: `open -na "Google Chrome" --args --app="https://kanban.page/app/"` (macOS) / `chrome --app=https://kanban.page/app/` (Linux/Windows).
 - Or make it your morning start page: browser settings → *On startup* → open the board's URL.
 
 ## What it does
@@ -108,12 +107,12 @@ Stage names are editable in place — click one and type. Stages can be added an
 
 ## Scope, honestly
 
-This is a **single-person, single-browser** tool by design. State lives in `localStorage` on one machine — that's what makes it install-free and instant. It is not optimized for phones, and there's no sync or team sharing. Those are natural ways to extend it (a mobile layout, an optional sync backend, shared boards) and PRs are welcome — but the core promise stays: open a file, get a board.
+This is a **single-person, single-browser** tool by design. State lives in `localStorage` on one browser — that's what makes it install-free and instant. It works on a phone, but each browser keeps its own copy: there is no sync and no team sharing, so a phone starts empty and you move a board across with `⋯ → Export backup` and `Import backup`. An optional sync backend and shared boards are natural ways to extend it, and PRs are welcome — but the core promise stays: open a URL, get a board.
 
 Practical notes:
 
 - **Back up occasionally.** `⋯ → Export backup` writes the whole board as JSON; `Import backup` restores it. A cleared browser is a cleared board.
-- **Multiple boards:** open with `?ns=<name>` (e.g. `index.html?ns=writing`) and you get a separate board with its own storage. Also handy as a scratch board.
+- **Multiple boards:** open with `?ns=<name>` (e.g. `?ns=writing`) and you get a separate board with its own storage. Also handy as a scratch board.
 
 ## Tests
 
