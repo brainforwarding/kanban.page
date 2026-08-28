@@ -243,6 +243,10 @@ h1,h2,h3,p{margin:0}
 .board.aslist .card .meta,
 .board.aslist .card .sess{opacity:0;transition-duration:0s;transition-delay:0s}
 .board.aslist{cursor:default}
+/* A card's height is animated while it flies, and only the list state carries
+   overflow:hidden — so mid-morph the box is short and nothing clips what spills
+   out of it. Clip for the length of the move and the question cannot arise. */
+.board.morphing .card{overflow:hidden}
 
 .card::before{transition:background-color .5s var(--ease) var(--edge-delay,0ms)}
 .card .meta,.card .sess{transition:opacity .42s var(--ease) var(--detail-delay,0ms)}
@@ -1064,6 +1068,7 @@ function counts(scope) {
 
   // One routine, both directions. Cards translate and change height; they never
   // scale, because scaling a card squashes the text inside it.
+  let morphEnd = 0;
   function morph(toList, DUR, STAG) {
     live = false;
     replay.hidden = true;
@@ -1083,6 +1088,7 @@ function counts(scope) {
     }
 
     bd.classList.toggle('aslist', toList);
+    bd.classList.add('morphing');
 
     cards.forEach((c, i) => {
       const a = first[i], b = c.getBoundingClientRect();
@@ -1090,7 +1096,10 @@ function counts(scope) {
       // colour arrives in the air — the eye reads colour while it moves;
       // the text waits for the landing, because moving text is just a blur
       c.style.setProperty('--edge-delay',   toList ? '0ms' : (i * STAG + 120) + 'ms');
-      c.style.setProperty('--detail-delay', toList ? '0ms' : (i * STAG + 820) + 'ms');
+      // DUR, not a hand-picked 820: the detail must not start arriving while
+      // this card's own height animation is still running, or the project name
+      // is painted below a box that has not finished growing under it
+      c.style.setProperty('--detail-delay', toList ? '0ms' : (i * STAG + DUR) + 'ms');
       c.animate([
         { transform: `translate(${dx}px,${dy}px)`, height: `${Math.round(a.height)}px` },
         { transform: 'none', height: `${Math.round(b.height)}px` }
@@ -1127,6 +1136,8 @@ function counts(scope) {
       setTimeout(() => setLegend('After', 'Kanban', true), landed - 400);
     }
 
+    clearTimeout(morphEnd);
+    morphEnd = setTimeout(() => bd.classList.remove('morphing'), landed + 60);
     setTimeout(() => { if (!toList) boardLive(); }, landed + 250);
   }
 })();
