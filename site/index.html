@@ -118,6 +118,11 @@ h1,h2,h3,p{margin:0}
   transition:color .2s var(--ease), background .2s var(--ease);
 }
 .railbtn:hover{color:var(--text);background:var(--raise)}
+/* the only glyph in a row of words, so it reads without shouting */
+/* hide-s below 620px: brand + theme + cup + CTA is 416px of fixed width,
+   and a phone is 390 — the chip in the close section carries it there */
+.railbtn.cupbtn{display:inline-flex;align-items:center;color:var(--accent);padding:8px 9px}
+.railbtn.cupbtn:hover{color:var(--accent);background:var(--accent-wash)}
 .railcta{
   font:500 12px/1 var(--mono); letter-spacing:.04em;
   color:var(--accent-ink); background:var(--accent-fill);
@@ -514,9 +519,19 @@ h1,h2,h3,p{margin:0}
 
 /* a third tier on purpose: it sits after the ask, it never competes with it */
 .afters{
-  display:flex;justify-content:center;align-items:center;gap:4px;
-  flex-wrap:wrap;margin-top:24px;
+  display:flex;justify-content:center;align-items:center;gap:18px;
+  flex-wrap:wrap;margin-top:26px;
 }
+/* the tip jar carries its own weight; share it stays in the quiet tier */
+.coffee{
+  display:inline-flex;align-items:center;gap:10px;
+  font:500 12px/1 var(--mono);letter-spacing:.08em;color:var(--accent);
+  padding:12px 17px;border-radius:8px;
+  border:1px solid var(--accent-dim);background:var(--accent-wash);
+  transition:border-color .2s var(--ease), transform .25s var(--ease);
+}
+.coffee:hover{border-color:var(--accent);transform:translateY(-2px)}
+.coffee:active{transform:translateY(0)}
 .share{
   display:inline-flex;align-items:center;gap:9px;
   font:500 11px/1 var(--mono);letter-spacing:.12em;color:var(--faint);
@@ -525,8 +540,9 @@ h1,h2,h3,p{margin:0}
 }
 .share:hover{color:var(--text);background:var(--raise)}
 .share svg{width:12px;height:12px;fill:currentColor;flex:none}
-/* a solid cup is a blob at 12px; only the outline reads as a cup */
-.share svg.cup{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+/* a solid cup is a blob at this size; only the outline reads as a cup */
+svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
+  stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 
 /* ── who uses it ─────────────────────────────────────── */
 
@@ -632,6 +648,8 @@ h1,h2,h3,p{margin:0}
   <span class="grow"></span>
   <button class="railbtn" id="themeBtn" title="Light / dark">theme</button>
   <a class="railbtn hide-s" href="https://github.com/brainforwarding/kanban.page">source</a>
+  <a class="railbtn cupbtn hide-s" href="https://buymeacoffee.com/sebasonearth" target="_blank" rel="noopener"
+     title="Buy me a coffee" aria-label="Buy me a coffee"><svg class="cup" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8z"/><path d="M17 10h1.4a2.6 2.6 0 0 1 0 5.2H17"/></svg></a>
   <a class="railcta" href="https://kanban.page/app/">Open the board</a>
 </header>
 
@@ -814,7 +832,7 @@ h1,h2,h3,p{margin:0}
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
         share it
       </a>
-      <a class="share" target="_blank" rel="noopener"
+      <a class="coffee" target="_blank" rel="noopener"
          href="https://buymeacoffee.com/sebasonearth">
         <svg class="cup" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8z"/><path d="M17 10h1.4a2.6 2.6 0 0 1 0 5.2H17"/></svg>
         buy me a coffee
