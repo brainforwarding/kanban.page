@@ -266,6 +266,7 @@ kbd {
   overflow-x: auto;
   overflow-y: hidden;
   scroll-snap-type: x proximity;
+  scroll-padding-inline: 16px;
 }
 /* snapping fights the drag's own edge-scrolling */
 .board.dragging { scroll-snap-type: none; }
@@ -1468,7 +1469,6 @@ button[disabled] { opacity: .4; pointer-events: none; }
   .search input { width: 0; padding: 0; }
   .search:focus-within { width: 190px; padding: 0 12px; justify-content: flex-start; }
   .search:focus-within input { width: 100%; }
-  .search:focus-within { width: 160px; }
   .board { gap: 10px; padding: 14px 10px calc(16px + env(safe-area-inset-bottom, 0px)); }
   .update-notice { right: 10px; bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
   .menu { right: 10px; max-width: calc(100vw - 20px); max-height: calc(100dvh - 64px); overflow-y: auto; }
@@ -1482,7 +1482,7 @@ button[disabled] { opacity: .4; pointer-events: none; }
      measured 272px. The (0,3,0) selector is deliberate:
      [data-density="compact"] .col:not(.ghost-col) (:540) outranks a bare .col
      and would keep its 248px floor alive on a small phone. */
-  .board { scroll-snap-type: x mandatory; scroll-padding-inline: 10px; }
+  .board { scroll-snap-type: x mandatory; scroll-padding-inline: 10px; }   /* matches its 10px padding */
   .board > .col:not(.ghost-col) {
     flex: 0 0 min(var(--col-w), calc(100vw - 96px));
     min-width: 0;
