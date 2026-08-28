@@ -137,9 +137,18 @@ kbd {
   letter-spacing: .06em;
   text-transform: lowercase;
   color: var(--text);
+  text-decoration: none;
   user-select: none;
   flex: none;
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin-left: -6px;
+  transition: background .16s;
 }
+/* the wordmark is the way back to the landing page: the app is served from
+   /app/, so ../ is the site root and stays right on a fork's own domain */
+.brand:hover { background: var(--raise); }
+.brand:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 2px; }
 
 .blink {
   width: 6px;
