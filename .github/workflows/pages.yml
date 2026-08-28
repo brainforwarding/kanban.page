@@ -32,7 +32,23 @@ jobs:
                 --exclude docs --exclude tests --exclude .github \
                 --exclude CNAME --exclude README.md --exclude CLAUDE.md \
                 ./ _site/app/
-          sed -i "s/__BUILD_ID__/${{ github.sha }}/g" _site/app/sw.js
+          # Version the shell on what the shell CONTAINS, not on the commit.
+          # The browser byte-compares sw.js on every visit, so stamping it with
+          # the SHA re-issued "Update available" to every installed board on
+          # every push — 8 of the last 12 deploys changed no app file at all.
+          # A hash of the shell files themselves means a landing-page or README
+          # commit leaves sw.js identical and nobody is prompted; a real app
+          # change still updates exactly as before.
+          BUILD_ID=$(cd _site/app && cat index.html styles.css core.js i18n.js app.js \
+                       manifest.webmanifest assets/icon.svg assets/icon-192.png \
+                       assets/icon-512.png sw.js | sha256sum | cut -c1-12)
+          sed -i "s/__BUILD_ID__/${BUILD_ID}/g" _site/app/sw.js
+          echo "shell build id: ${BUILD_ID}"
+      - name: Stage the landing page (canonical repo only)
+        # A fork that enables Pages should publish a working board at its own
+        # URL — not a copy of this site's marketing page and tip jar at its root.
+        if: github.repository == 'brainforwarding/kanban.page'
+        run: |
           cp site/index.html _site/index.html
           cp site/_og/og-kanban-page.png _site/og.png
           cp CNAME _site/CNAME
