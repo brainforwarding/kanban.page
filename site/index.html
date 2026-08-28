@@ -7,6 +7,7 @@
 <meta name="theme-color" content="#131218">
 <meta name="description" content="A simple kanban for everything you're working on. Organised by stage and by project. Free, works offline, no account — and your coding agent can edit it.">
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://kanban.page/">
 <meta property="og:title" content="kanban.page — a simple kanban for everything you're working on">
 <meta property="og:description" content="Organised by stage and by project. Free, works offline, no account — and your coding agent can edit it too.">
 <meta property="og:image" content="https://kanban.page/og.png">
@@ -644,6 +645,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
   .rv-print{opacity:1 !important;clip-path:none !important}
 }
 </style>
+<link rel="canonical" href="https://kanban.page/">
 </head>
 <body>
 
@@ -1087,19 +1089,26 @@ function counts(scope) {
       frame.append(ghost);
     }
 
+    // Both delays are set BEFORE the class flips. The measuring loop below calls
+    // getBoundingClientRect(), which flushes style — and a flush that happens
+    // after aslist is gone but before the new delay lands starts the opacity
+    // transition with whatever the last morph left behind (0ms), so the project
+    // name fades up while its card is still a third of its final height.
+    cards.forEach((c, i) => {
+      // colour arrives in the air — the eye reads colour while it moves;
+      // the text waits for the landing, because moving text is just a blur
+      c.style.setProperty('--edge-delay',   toList ? '0ms' : (i * STAG + 120) + 'ms');
+      // DUR, not a hand-picked 820: the detail must not start arriving while
+      // this card's own height animation is still running
+      c.style.setProperty('--detail-delay', toList ? '0ms' : (i * STAG + DUR) + 'ms');
+    });
+
     bd.classList.toggle('aslist', toList);
     bd.classList.add('morphing');
 
     cards.forEach((c, i) => {
       const a = first[i], b = c.getBoundingClientRect();
       const dx = a.left - b.left, dy = a.top - b.top;
-      // colour arrives in the air — the eye reads colour while it moves;
-      // the text waits for the landing, because moving text is just a blur
-      c.style.setProperty('--edge-delay',   toList ? '0ms' : (i * STAG + 120) + 'ms');
-      // DUR, not a hand-picked 820: the detail must not start arriving while
-      // this card's own height animation is still running, or the project name
-      // is painted below a box that has not finished growing under it
-      c.style.setProperty('--detail-delay', toList ? '0ms' : (i * STAG + DUR) + 'ms');
       c.animate([
         { transform: `translate(${dx}px,${dy}px)`, height: `${Math.round(a.height)}px` },
         { transform: 'none', height: `${Math.round(b.height)}px` }
