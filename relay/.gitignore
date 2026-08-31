@@ -1,0 +1,2 @@
+# wrangler's local cache — account ids and build state, not source
+.wrangler/

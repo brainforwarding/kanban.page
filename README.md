@@ -74,9 +74,12 @@ deleted once it's empty.
 
 ## Good to know
 
-- **One browser, one board.** State lives in `localStorage`, which is what makes
-  it install-free and instant. There's no sync and no sharing, so a phone starts
-  empty. Both are natural ways to extend it, and PRs are welcome.
+- **Your phone too, with no account.** **⋯ → Sync devices** shows a QR code;
+  scan it and that device has the same board, updating live as you work. There
+  is no sign-up and no password: the link *is* the key, so anyone you give it
+  to can read and edit the board — and the server only ever holds bytes it
+  cannot decrypt. Sync is off until you turn it on, and every synced device
+  still keeps a complete local copy. See [docs/sync.md](docs/sync.md).
 - **Move a board with `⋯ → Export backup`**, then `Import backup`. Worth doing
   occasionally regardless: a cleared browser is a cleared board.
 - **Nothing is one click from gone.** The board archives; only the archive
@@ -90,21 +93,24 @@ deleted once it's empty.
 ## Develop
 
 ```bash
-node --test tests/core.test.js     # 65 unit tests, no dependencies
+node --test tests/core.test.js     # 93 unit tests, no dependencies
 ```
 
 They cover what is easy to get silently wrong: calendar dates across DST,
 Monday–Sunday boundaries across month and year ends, report aggregation,
-markdown output, and storage migration. Then open `tests/dom.test.html` in
-Chrome for 34 interaction tests — they drive the real app in an iframe and
-report pass/fail in the page title, against a `?ns=test` board that never
-touches your data.
+markdown output, storage migration, and the sync merge — clocks, tombstones,
+and three replicas converging. Then open `tests/dom.test.html` in Chrome for
+36 interaction tests — they drive the real app in an iframe and report
+pass/fail in the page title, against a `?ns=test` board that never touches
+your data.
 
 ```
 index.html   markup
 styles.css   design tokens + every component
-core.js      pure logic: dates, weeks, report aggregation, markdown, migration
-app.js       the app: rendering, drag, editor, projects, report
+core.js      pure logic: dates, weeks, report aggregation, markdown, migration, merge
+app.js       the app: rendering, drag, editor, projects, report, sync
+qr.js        vendored QR encoder (MIT, Project Nayuki), loaded only by the sync sheet
+relay/       the sync relay: one Cloudflare Worker, deploy your own with `wrangler deploy`
 ```
 
 ## License

@@ -7,7 +7,15 @@ const BoardCore = (() => {
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-  const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3);
+  // Crypto-strength when available: with sync, ids are minted on independent
+  // devices, and a collision would silently fold two cards into one.
+  const uid = () => {
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+      const b = crypto.getRandomValues(new Uint8Array(6));
+      return Array.from(b, x => x.toString(16).padStart(2, '0')).join('') + Date.now().toString(36).slice(-3);
+    }
+    return Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3);
+  };
 
   /* ── calendar dates ──────────────────────────────────── */
 
@@ -342,6 +350,370 @@ const BoardCore = (() => {
     return tasks;
   }
 
+  /* ── sync: clocks, merge, sealed envelopes ───────────────
+     Two boards that have drifted apart meet in merge(). Everything here is
+     pure and deterministic over the synced subset: both devices, fed the
+     same pair of boards in either order, converge on the same result. The
+     clocks are maintained in ONE place — stampChanges, called by app.js
+     before every save — never by scattered touch() calls, so no future
+     feature can forget to wind them.
+
+     The clock is a hybrid logical clock folded into one number: every stamp
+     is max(wall clock, everything already observed + 1). A device with a
+     fast clock cannot make its old edits win forever — the other side's
+     next stamp jumps past it, so causally later edits always dominate.
+
+     Tasks carry TWO clocks: `mt` for content (title, notes, session, flag,
+     project, archive fields) and `pmt` for placement (columnId, order).
+     Without the split, addTask bumping every sibling's order — or one
+     "Sort by project" — would stamp whole rows and let a stale device's
+     copy beat a real content edit made elsewhere. Placement never fights
+     content, and placement never resurrects a deleted card. */
+
+  /** Canonical serialization: object keys sorted, so two structurally equal
+      values compare equal regardless of construction history. All tie-breaks
+      go through this — an arbitrary winner, but the same arbitrary winner on
+      both devices. */
+  function canonValue(x) {
+    if (Array.isArray(x)) return x.map(canonValue);
+    if (x && typeof x === 'object') {
+      const out = {};
+      for (const k of Object.keys(x).sort()) out[k] = canonValue(x[k]);
+      return out;
+    }
+    return x;
+  }
+  const canon = x => JSON.stringify(canonValue(x));
+
+  /** Content clock of a task. `updatedAt` seeds boards from before sync. */
+  const mtOf = t => t.mt ?? t.updatedAt ?? t.createdAt ?? 0;
+  /** Placement clock of a task. */
+  const pmtOf = t => t.pmt ?? mtOf(t);
+
+  const taskContent = t => {
+    const { mt, pmt, columnId, order, ...content } = t;
+    return content;
+  };
+  const taskPlacement = t => ({ columnId: t.columnId, order: t.order });
+  const itemContent = c => {
+    const { mt, ...content } = c;
+    return content;
+  };
+
+  /** The highest clock visible anywhere in a board — what a new stamp must
+      strictly exceed. */
+  function clockMax(st) {
+    let m = 0;
+    for (const t of st.tasks || []) m = Math.max(m, mtOf(t), pmtOf(t));
+    for (const e of st.events || []) m = Math.max(m, e.mt || 0);
+    for (const c of st.columns || []) m = Math.max(m, c.mt || 0);
+    for (const p of st.projects || []) m = Math.max(m, p.mt || 0);
+    for (const ts of Object.values(st.tombstones || {})) m = Math.max(m, ts);
+    return Math.max(m, st.columnsMt || 0, st.projectsMt || 0);
+  }
+
+  /**
+   * Stamp everything `next` changed since `prev` (the last-saved state).
+   * Mutates and returns `next`. New events get no stamp — an appended event
+   * is immutable and merges by union; only a rewritten one (rewriteDay)
+   * needs a clock to win a collision. Any stamp clears the first-run `seed`
+   * marker: a board the user has touched is no longer safe to replace.
+   */
+  function stampChanges(prev, next, now = Date.now()) {
+    const clock = Math.max(now, clockMax(prev) + 1, clockMax(next) + 1);
+    let stamped = false;
+
+    const oldTasks = new Map((prev.tasks || []).map(t => [t.id, t]));
+    for (const t of next.tasks || []) {
+      const before = oldTasks.get(t.id);
+      if (!before || canon(taskContent(before)) !== canon(taskContent(t))) { t.mt = clock; stamped = true; }
+      if (!before || canon(taskPlacement(before)) !== canon(taskPlacement(t))) { t.pmt = clock; stamped = true; }
+    }
+
+    const oldEvents = new Map((prev.events || []).map(e => [e.id, e]));
+    for (const e of next.events || []) {
+      const before = oldEvents.get(e.id);
+      if (before && canon(itemContent(before)) !== canon(itemContent(e))) { e.mt = clock; stamped = true; }
+      if (!before) stamped = true;
+    }
+
+    for (const [list, oldList, key] of [
+      [next.columns, prev.columns, 'columnsMt'],
+      [next.projects, prev.projects, 'projectsMt'],
+    ]) {
+      const old = new Map((oldList || []).map(c => [c.id, c]));
+      for (const c of list || []) {
+        const before = old.get(c.id);
+        if (!before || canon(itemContent(before)) !== canon(itemContent(c))) { c.mt = clock; stamped = true; }
+      }
+      // the order VECTOR has its own clock: reorders, adds and deletes move
+      // it; a rename alone does not, so a rename can never drag the done
+      // line of a concurrent reorder along with it
+      const ids = l => (l || []).map(c => c.id).join(' ');
+      if (ids(oldList) !== ids(list)) { next[key] = clock; stamped = true; }
+    }
+
+    if ((prev.tombstones && Object.keys(prev.tombstones).length) !==
+        (next.tombstones && Object.keys(next.tombstones).length)) stamped = true;
+
+    if (stamped) delete next.seed;
+    return next;
+  }
+
+  /**
+   * The subset of state that travels. Preferences stay on their device.
+   *
+   * Canonical: tasks by id, events by (at, id), tombstones by key — the same
+   * order merge() emits. Two boards holding the same work therefore serialize
+   * identically no matter which mutation built them, which is what lets the
+   * client compare "what I have" against "what the relay has" with a string
+   * and never push a board the relay already holds.
+   */
+  const syncable = st => ({
+    v: 2,
+    columns: st.columns,
+    columnsMt: st.columnsMt || 0,
+    projects: st.projects,
+    projectsMt: st.projectsMt || 0,
+    tasks: (st.tasks || []).slice().sort((x, y) => x.id < y.id ? -1 : x.id > y.id ? 1 : 0),
+    tombstones: Object.fromEntries(Object.entries(st.tombstones || {}).sort(([a], [b]) => a < b ? -1 : 1)),
+    events: (st.events || []).slice()
+      .sort((x, y) => (x.at || 0) - (y.at || 0) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)),
+  });
+
+  /**
+   * merge(local, remote) → a fresh board. Local preferences pass through
+   * untouched; the synced subset merges by the rules in docs/sync-spec.md:
+   *
+   * - columns/projects: per-item union (id, then name-deduped for boards
+   *   with independent histories), item content by higher `mt`; the ORDER
+   *   is one atomic vector under columnsMt/projectsMt — order is semantics,
+   *   the last column is the done line. Stages the winning vector does not
+   *   know arrive BEFORE its last column, so they can never move the done
+   *   line; unknown projects append.
+   *
+   *   Known and accepted: merge is commutative and idempotent, but the
+   *   middle order of stages added CONCURRENTLY on two devices depends on
+   *   the order the merges happened in, so two devices can briefly list the
+   *   same stages in a different middle order. The set converges, the done
+   *   line converges, and the next reorder on either device stamps a new
+   *   vector clock that wins everywhere and settles it. The alternative —
+   *   a per-stage order key, which would be fully associative — lets a
+   *   stage added elsewhere sort last and silently redefine what the weekly
+   *   report calls finished. A cosmetic divergence that self-heals beats a
+   *   semantic one that does not.
+   * - tasks: content by `mt`, placement by `pmt`, independently. A
+   *   tombstone deletes unless the CONTENT clock is newer — an edit made
+   *   after (or stamped after) the delete wins and the data survives;
+   *   a mere reorder never resurrects anything.
+   * - events: union by id — the log only ever grows.
+   */
+  function merge(local, remote) {
+    const deep = x => JSON.parse(JSON.stringify(x));
+    const a = local || {}, b = remote || {};
+
+    const tombstones = {};
+    for (const side of [a.tombstones, b.tombstones]) {
+      for (const [id, ts] of Object.entries(side || {})) {
+        tombstones[id] = Math.max(tombstones[id] || 0, ts);
+      }
+    }
+    const sortedTombstones = {};
+    for (const id of Object.keys(tombstones).sort()) sortedTombstones[id] = tombstones[id];
+
+    /** Per-item union of columns or projects + one atomic order vector. */
+    function mergeLists(aList, bList, aMt, bMt, insertBeforeLast) {
+      const aIds = (aList || []).map(c => c.id);
+      const bIds = (bList || []).map(c => c.id);
+      const orderWinsA = aMt !== bMt ? aMt > bMt : canon(aIds) >= canon(bIds);
+      const winnerIds = orderWinsA ? aIds : bIds;
+      const orderMt = Math.max(aMt, bMt);
+
+      // union by id: higher item clock wins content, tombstones delete
+      const byId = new Map();
+      for (const c of aList || []) byId.set(c.id, c);
+      for (const c of bList || []) {
+        const held = byId.get(c.id);
+        if (!held) { byId.set(c.id, c); continue; }
+        const cm = c.mt || 0, hm = held.mt || 0;
+        if (cm > hm || (cm === hm && canon(c) > canon(held))) byId.set(c.id, c);
+      }
+      let items = [...byId.values()].filter(c => !(tombstones[c.id] != null && (c.mt || 0) <= tombstones[c.id]));
+      if (!items.length) items = [...byId.values()]; // never merge a board into zero stages
+
+      // Two boards with separate histories both have an "Inbox" under
+      // different ids: keep one, remember the alias so tasks follow it.
+      const inWinner = new Set(winnerIds);
+      const byName = new Map();
+      const alias = new Map();
+      for (const c of items) {
+        const held = byName.get(c.name);
+        if (!held) { byName.set(c.name, c); continue; }
+        const keep =
+          inWinner.has(held.id) !== inWinner.has(c.id) ? (inWinner.has(held.id) ? held : c)
+            : (held.mt || 0) !== (c.mt || 0) ? ((held.mt || 0) > (c.mt || 0) ? held : c)
+            : canon(held) >= canon(c) ? held : c;
+        const drop = keep === held ? c : held;
+        byName.set(c.name, keep);
+        alias.set(drop.id, keep.id);
+      }
+      items = [...byName.values()];
+
+      // the winning vector first (survivors only), then what it never saw —
+      // before its last entry for columns, so the done line cannot move
+      const itemById = new Map(items.map(c => [c.id, c]));
+      const ordered = winnerIds.filter(id => itemById.has(id)).map(id => itemById.get(id));
+      const leftovers = items.filter(c => !winnerIds.includes(c.id))
+        .sort((x, y) => x.id < y.id ? -1 : 1); // argument-order independent
+      if (insertBeforeLast && ordered.length) ordered.splice(ordered.length - 1, 0, ...leftovers);
+      else ordered.push(...leftovers);
+
+      return { items: ordered, orderMt, alias };
+    }
+
+    const cols = mergeLists(a.columns, b.columns, a.columnsMt || 0, b.columnsMt || 0, true);
+    const projs = mergeLists(a.projects, b.projects, a.projectsMt || 0, b.projectsMt || 0, false);
+
+    const ofA = new Map((a.tasks || []).map(t => [t.id, t]));
+    const ofB = new Map((b.tasks || []).map(t => [t.id, t]));
+    const tasks = [];
+    for (const id of new Set([...ofA.keys(), ...ofB.keys()])) {
+      const x = ofA.get(id), y = ofB.get(id);
+      const pick = (clockOf) => !x ? y : !y ? x
+        : clockOf(x) !== clockOf(y) ? (clockOf(x) > clockOf(y) ? x : y)
+        : (canon(x) >= canon(y) ? x : y);
+      const cw = pick(mtOf);   // content winner
+      const pw = pick(pmtOf);  // placement winner
+      // Only the CONTENT clock argues with a tombstone: a reorder elsewhere
+      // must never resurrect a deliberately deleted card, while an edit (or
+      // an undo, which restamps what it brings back) does.
+      if (tombstones[id] != null && mtOf(cw) <= tombstones[id]) continue;
+      const row = deep(cw);
+      if (pw !== cw) {
+        row.columnId = pw.columnId;
+        row.order = pw.order;
+        row.pmt = pmtOf(pw);
+      }
+      tasks.push(row);
+    }
+
+    // Re-point tasks at the surviving stage/project: alias from the name
+    // dedupe first, then name-match against wherever the id came from, then
+    // the first column — migrate's rule. Derived state: never bumps clocks.
+    const nameOf = new Map([...(a.columns || []), ...(b.columns || [])].map(c => [c.id, c.name]));
+    const colByName = new Map(cols.items.map(c => [c.name, c.id]));
+    const colIds = new Set(cols.items.map(c => c.id));
+    const projNameOf = new Map([...(a.projects || []), ...(b.projects || [])].map(p => [p.id, p.name]));
+    const projByName = new Map(projs.items.map(p => [p.name, p.id]));
+    const projIds = new Set(projs.items.map(p => p.id));
+    for (const t of tasks) {
+      if (cols.alias.has(t.columnId)) t.columnId = cols.alias.get(t.columnId);
+      if (!colIds.has(t.columnId)) {
+        t.columnId = colByName.get(nameOf.get(t.columnId)) ?? (cols.items[0] && cols.items[0].id);
+      }
+      if (t.projectId && projs.alias.has(t.projectId)) t.projectId = projs.alias.get(t.projectId);
+      if (t.projectId && !projIds.has(t.projectId)) {
+        const mapped = projByName.get(projNameOf.get(t.projectId));
+        if (mapped) t.projectId = mapped;
+      }
+    }
+
+    // The log only ever grows. A same-id collision is a rewriteDay conflict:
+    // the stamped rewrite wins, a tie goes to the greater serialization.
+    const events = new Map();
+    for (const e of a.events || []) events.set(e.id, e);
+    for (const e of b.events || []) {
+      const held = events.get(e.id);
+      if (!held) { events.set(e.id, e); continue; }
+      const em = e.mt || 0, hm = held.mt || 0;
+      if (em > hm || (em === hm && canon(e) > canon(held))) events.set(e.id, e);
+    }
+
+    const out = {
+      ...deep(a),
+      v: 2,
+      columns: deep(cols.items),
+      columnsMt: cols.orderMt,
+      projects: deep(projs.items),
+      projectsMt: projs.orderMt,
+      tombstones: sortedTombstones,
+      tasks: tasks.sort((x, y) => x.id < y.id ? -1 : x.id > y.id ? 1 : 0),
+      events: [...events.values()].map(deep)
+        .sort((x, y) => (x.at || 0) - (y.at || 0) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)),
+    };
+    delete out.seed; // a merged board is never a replaceable first-run seed
+    return out;
+  }
+
+  /* ── sync: capability crypto ──────────────────────────────
+     One secret pairs the devices. HKDF splits it into a bearer token (what
+     the relay sees) and an AES key (what it never sees); the relay addresses
+     storage by SHA-256(token), so a server dump holds hashes and ciphertext.
+     The relay is trusted only to be honest-but-curious and available —
+     AES-GCM plus AAD authenticates each envelope, not the version history.
+     WebCrypto exists in every target browser and in node ≥20, so all of
+     this is unit-tested. */
+
+  function bytesToB64u(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function b64uToBytes(s) {
+    const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(bin, c => c.charCodeAt(0));
+  }
+
+  /** 256 random bits, base64url — the whole capability. */
+  const randomSecret = () => bytesToB64u(crypto.getRandomValues(new Uint8Array(32)));
+
+  const HKDF_SALT = new Uint8Array(32); // fixed: the secret carries the entropy
+
+  async function deriveSync(secret) {
+    const raw = b64uToBytes(secret);
+    const km = await crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveBits', 'deriveKey']);
+    const info = label => ({ name: 'HKDF', hash: 'SHA-256', salt: HKDF_SALT, info: new TextEncoder().encode(label) });
+    const tokenBits = await crypto.subtle.deriveBits(info('kanban.page auth'), km, 256);
+    const key = await crypto.subtle.deriveKey(info('kanban.page enc'), km,
+      { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    return { token: bytesToB64u(new Uint8Array(tokenBits)), key };
+  }
+
+  async function pipeBytes(bytes, stream) {
+    const out = await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer();
+    return new Uint8Array(out);
+  }
+
+  // The envelope's metadata is authenticated as AAD, so the relay cannot
+  // flip `gz` or `v` to cause a deterministic client failure.
+  const envAad = env => new TextEncoder().encode(`kanban.page:env${env.v}:gz${env.gz}`);
+
+  /** Board → opaque envelope. gzip when the platform has it, then AES-GCM. */
+  async function seal(key, obj) {
+    let data = new TextEncoder().encode(JSON.stringify(obj));
+    let gz = 0;
+    if (typeof CompressionStream !== 'undefined') {
+      data = await pipeBytes(data, new CompressionStream('gzip'));
+      gz = 1;
+    }
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: envAad({ v: 1, gz }) }, key, data));
+    return { v: 1, gz, n: bytesToB64u(iv), d: bytesToB64u(ct) };
+  }
+
+  /** Envelope → board. Throws on tampering (GCM) or a wrong key. */
+  async function unseal(key, env) {
+    const pt = new Uint8Array(await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: b64uToBytes(env.n), additionalData: envAad(env) },
+      key, b64uToBytes(env.d)));
+    const data = env.gz ? await pipeBytes(pt, new DecompressionStream('gzip')) : pt;
+    return JSON.parse(new TextDecoder().decode(data));
+  }
+
   /* ── storage ─────────────────────────────────────────── */
 
   function defaultBoard(locale = 'en') {
@@ -354,6 +726,7 @@ const BoardCore = (() => {
       projects: [],
       tasks: [],
       events: [],
+      tombstones: {},
       filter: null,
       flagFilter: false,
     };
@@ -433,6 +806,8 @@ const BoardCore = (() => {
     weeksWithActivity, aggregateWeek, groupByProject, summaryLine, toMarkdown, reportFilename,
     shouldLogMove, isDay, makeEvent, rewriteConflict, rewriteDay,
     reindex, applyOrder, sortByProject, defaultBoard, migrate,
+    mtOf, pmtOf, clockMax, canon, stampChanges, syncable, merge,
+    randomSecret, deriveSync, seal, unseal, bytesToB64u, b64uToBytes,
   };
 })();
 

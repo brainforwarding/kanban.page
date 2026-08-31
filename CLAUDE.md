@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A personal kanban board that runs from a file: open `index.html` in Chrome. Vanilla HTML/CSS/JS — no build step, no dependencies, no framework, no network. All state lives in `localStorage` (`board.v2`, or `board.v2.<ns>` when opened with `?ns=<name>` — use a namespace for a scratch board that never touches real data).
+A personal kanban board that runs from a file: open `index.html` in Chrome. Vanilla HTML/CSS/JS — no build step, no dependencies, no framework. All state lives in `localStorage` (`board.v2`, or `board.v2.<ns>` when opened with `?ns=<name>` — use a namespace for a scratch board that never touches real data).
+
+Optional device sync is the one thing that touches the network, and only after the user turns it on: an end-to-end encrypted Cloudflare Worker relay in `relay/`, addressed by a secret with no account anywhere. `docs/sync.md` is the design record; the invariants an agent can break are below.
 
 ## Commands
 
@@ -30,7 +32,7 @@ Per-test failures live in `window.__results` on that page. Keep the README's tes
 
 Four files, strict split:
 
-- `core.js` — pure logic, zero DOM: dates/weeks, report aggregation, markdown export, event log, storage migration. Exposed as the `BoardCore` global and via CommonJS for the node tests. New logic with edge cases belongs here, where it's unit-testable.
+- `core.js` — pure logic, zero DOM: dates/weeks, report aggregation, markdown export, event log, storage migration, the sync merge and its crypto. Exposed as the `BoardCore` global and via CommonJS for the node tests. New logic with edge cases belongs here, where it's unit-testable.
 - `app.js` — everything else: rendering, drag, editor, composer, projects, report modal. Classic script (no modules); top-level function declarations are deliberately global — the DOM tests call them (`openReport`, `addTask`, …) plus the `window.__board` seam for state.
 - `styles.css` — design tokens at the top (light + dark via `[data-theme]`), then every component.
 - `index.html` — static markup shells; `app.js` fills them.
@@ -57,6 +59,18 @@ The modal shows the route (`from → to`) precisely because the export does not:
 
 **The tick is the only filter.** `toMarkdown` emits exactly the entries it is handed and has no opinion of its own; the opinion lives in `aggregateWeek`'s `include` flag, which pre-ticks work that finished (`to === doneStage`) under a project. Everything else is listed, unticked, and one click from being exported anyway. This split is deliberate and load-bearing: it used to re-filter after the tick, so the modal could read "3 / 3" while the clipboard said "Nothing finished." Never reintroduce a filter downstream of the tick — if a rule should shape the export, it belongs in `include` where the user can see and overrule it.
 
+### Sync: the rules that keep a merge from eating work
+
+`merge(local, remote)` in `core.js` is pure and unit-tested; the client loop in `app.js` is what has to be careful. Four things will silently lose data if changed carelessly:
+
+**Clocks are wound in exactly one place.** `stampChanges` diffs the state being saved against the last-saved state (`lastStamped`) and stamps what changed. Never add a `touch()` at a mutation site — the diff is what makes every path correct without one, `undo()` included (restoring a snapshot is a change, so what undo brings back is stamped *now* and beats the remote copy it is undoing). Stamps are logical, not wall-clock: always past `clockMax`, so a device with a wrong clock cannot win forever.
+
+**A task has two clocks, and they must stay apart.** `mt` is content, `pmt` is placement (`columnId`/`order`). Placement churns impersonally — `addTask` bumps every sibling's order, "Sort by project" rewrites the board — so a single whole-row clock would let a tidy on one device overwrite a title edited on another. Only `mt` argues with a tombstone, which is why a reorder can never resurrect a deleted card.
+
+**Stage order is atomic; stage identity is not.** Items merge per id (two devices adding a stage keep both); the order is one vector under `columnsMt`. A stage the winning vector never saw is inserted *before* its last entry, because the last column is the done stage and an arriving stage must never redefine what the report calls finished. Merge is commutative and idempotent but not associative for that middle order — a documented, self-healing trade, see `docs/sync.md`.
+
+**Every apply is a merge, never a replace, and never mid-interaction.** That holds for remote pulls *and* for the cross-tab `storage` event (this tab may hold edits still inside its save debounce). `syncBusy()` is the barrier: drags, composer, open editor, inline stage rename, report date edit — each settles by calling `flushExternal()`. The editor is the sharp one: its `draft` is a clone from open time, so applying underneath it lets the following save clobber the remote edit. And the `floor` — events and tombstones known to be on the relay — is unioned into every push, so no snapshot write (an import, an undo) can shrink the server's log. While sync is on, Import merges.
+
 ### Rendering model and its one big gotcha
 
 `render()` rebuilds the whole board with `board.innerHTML = ''` (wrapped in `flip()` so cards animate rect-to-rect; `flip()` also preserves per-column scroll). Consequence: Chrome fires `blur` on a focused element **mid-teardown while it still reads as connected** — any commit-on-blur logic must defer a tick and re-check `isConnected` (see the composer in `composerEl`). `save()` is debounced 120ms — tests sleep ~200ms before asserting on `localStorage`.
@@ -65,7 +79,8 @@ The modal shows the route (`from → to`) precisely because the export does not:
 
 - **The board archives; only the archive deletes.** Nothing on the board is one click from gone; the single irreversible action lives in the archive behind a two-step confirm.
 - **Closing a text surface = saving.** `closeComposer()` commits any typed text as a card, and closing the editor — including clicking outside it — calls `saveEditor()`. Only a deliberate gesture discards: Esc, or the editor's ✕. The editor used to do the opposite and destroy the draft silently, with no undo, because `undo()` restores board state and a draft was never in state.
-- **Damaged boards keep their event log** — the log is the only copy of the history (see migration tests).
+- **Damaged boards keep their event log** — the log is the only copy of the history (see migration tests). Sync obeys this too: merge unions events and never drops one, and the push floor stops a snapshot from truncating the relay's copy.
+- **Sync is opt-in and reversible from either end.** Stop syncing forgets this device's key (Undo toast — the secret may exist nowhere else); Delete from server is the armed two-step, and the relay answers 410 forever after so a stale device cannot recreate a wiped board.
 
 ### Touch, and the three responsive axes
 

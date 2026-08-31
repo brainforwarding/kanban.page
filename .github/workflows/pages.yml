@@ -30,6 +30,7 @@ jobs:
           mkdir -p _site/app
           rsync -a --exclude .git --exclude _site --exclude site \
                 --exclude docs --exclude tests --exclude .github \
+                --exclude relay \
                 --exclude CNAME --exclude README.md --exclude CLAUDE.md \
                 ./ _site/app/
           # Version the shell on what the shell CONTAINS, not on the commit.
@@ -39,7 +40,7 @@ jobs:
           # A hash of the shell files themselves means a landing-page or README
           # commit leaves sw.js identical and nobody is prompted; a real app
           # change still updates exactly as before.
-          BUILD_ID=$(cd _site/app && cat index.html styles.css core.js i18n.js app.js \
+          BUILD_ID=$(cd _site/app && cat index.html styles.css core.js i18n.js qr.js app.js \
                        manifest.webmanifest assets/icon.svg assets/icon-192.png \
                        assets/icon-512.png sw.js | sha256sum | cut -c1-12)
           sed -i "s/__BUILD_ID__/${BUILD_ID}/g" _site/app/sw.js

@@ -129,6 +129,39 @@
   </footer>
 </aside>
 
+<!-- sync: the same board on another device -->
+<section class="sheet" id="sync" hidden role="dialog" aria-modal="true" aria-label="Sync">
+  <header class="panel-head">
+    <h2 id="syncTitle">Sync</h2>
+    <button class="icon" data-close></button>
+  </header>
+
+  <div class="sheet-body">
+    <p class="sync-say" id="sync-say"></p>
+
+    <div class="sync-pair" id="sync-pair" hidden>
+      <div class="qr" id="sync-qr"></div>
+      <div class="sync-link">
+        <p class="sync-line" id="sync-scan"></p>
+        <div class="cmd-input" id="sync-url-wrap">
+          <input id="sync-url" type="text" readonly spellcheck="false">
+          <button class="icon sm" id="sync-copy" title="Copy"></button>
+        </div>
+        <p class="sync-warn" id="sync-warn"></p>
+      </div>
+    </div>
+  </div>
+
+  <footer class="sheet-foot">
+    <span class="count" id="sync-status" role="status"></span>
+    <span class="grow"></span>
+    <button class="ghost" id="sync-stop" hidden>Stop syncing</button>
+    <button class="ghost danger" id="sync-del" hidden>Delete from server</button>
+    <button class="primary" id="sync-retry" hidden>Try again</button>
+    <button class="primary" id="sync-enable">Enable sync</button>
+  </footer>
+</section>
+
 <!-- menu -->
 <div class="menu" id="menu" hidden>
   <button data-act="projects">Projects<kbd>P</kbd></button>
@@ -142,6 +175,7 @@
   <hr>
   <button data-act="export">Export backup</button>
   <button data-act="import">Import backup</button>
+  <button data-act="sync" id="act-sync" aria-pressed="false">Sync devices<span class="tick">&#10003;</span></button>
   <hr>
   <div class="menu-label" id="languageLabel">Language</div>
   <div role="group" aria-label="Language" id="languageChoices">

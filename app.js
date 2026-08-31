@@ -5,7 +5,7 @@
 
 const $  = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
-const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3);
+const uid = () => BoardCore.uid();
 const clone = o => JSON.parse(JSON.stringify(o));
 const EASE = 'cubic-bezier(.2,.8,.25,1)';
 
@@ -42,9 +42,12 @@ const NS = new URLSearchParams(location.search).get('ns');
 const KEY = NS ? `board.v2.${NS}` : 'board.v2';
 const LEGACY_KEY = NS ? null : 'board.v1';
 
-/** First ever run: one card, so the session line is discoverable. */
+/** First ever run: one card, so the session line is discoverable. `seed`
+    marks the board replaceable when a sync link adopts it — stampChanges
+    clears it on the first real change, so content is never inferred. */
 function firstRun() {
   const s = C.defaultBoard(locale);
+  s.seed = true;
   const now = Date.now();
   const t = {
     id: C.uid(),
@@ -103,7 +106,12 @@ function applyLocale() {
   $('#proj-name').placeholder = tr('newProject'); $('#proj-add button').textContent = tr('add');
   $('#archive').setAttribute('aria-label', tr('archive')); $('#archive h2').textContent = tr('archive');
   $('#arch-empty').textContent = tr('deleteAll');
-  const menuText = { projects: tr('projects'), archive: tr('archive'), theme: tr('theme'), addcol: tr('addStage'), sortproj: tr('sortProject'), export: tr('export'), import: tr('import') };
+  const menuText = { projects: tr('projects'), archive: tr('archive'), theme: tr('theme'), addcol: tr('addStage'), sortproj: tr('sortProject'), export: tr('export'), import: tr('import'), sync: tr('syncDevices') };
+  $('#sync').setAttribute('aria-label', tr('sync'));
+  $('#syncTitle').textContent = tr('sync');
+  $('[data-close]', $('#sync')).title = tr('close');
+  $('#sync-copy').title = tr('copy');
+  $('#sync-url').setAttribute('aria-label', tr('pairingLink'));
   Object.entries(menuText).forEach(([act, label]) => {
     const b = $(`[data-act="${act}"]`); if (b) b.childNodes[0].textContent = label;
   });
@@ -125,6 +133,7 @@ function setLocale(next) {
   if (!panel.hidden) renderProjects();
   if (!archiveEl.hidden) renderArchive();
   if (!reportEl.hidden) renderReport(false);
+  if (!$('#sync').hidden) renderSync();
   $('#menuBtn').focus();
 }
 
@@ -132,17 +141,487 @@ let state = load();
 applyLocale();
 let saveTimer = null;
 
+// The reference the sync clocks are wound against: the state as of the last
+// save (or the last applied external state). stampChanges diffs against it,
+// which is what makes every mutation path — undo included — stamp correctly
+// without a single touch() call anywhere else.
+let lastStamped = clone(state);
+
+function flushSave() {
+  clearTimeout(saveTimer);
+  C.stampChanges(lastStamped, state);
+  lastStamped = clone(state);
+  try {
+    localStorage.setItem(KEY, JSON.stringify(state));
+  } catch (err) {
+    console.warn('board: could not write storage —', err);
+    toast('Storage is unavailable — export a backup', null, 8000);
+  }
+  if (sync) schedulePush();
+}
+
 function save() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(state));
-    } catch (err) {
-      console.warn('board: could not write storage —', err);
-      toast('Storage is unavailable — export a backup', null, 8000);
-    }
-  }, 120);
+  saveTimer = setTimeout(() => { saveTimer = null; flushSave(); }, 120);
 }
+
+/** Write a save still sitting in the debounce — and only then. An
+    unconditional write here would resurrect a board that something else
+    just cleared, since this fires while the page is being torn down. */
+function flushPendingSave() {
+  if (saveTimer === null) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  flushSave();
+}
+
+/* ── tab sync ──────────────────────────────────────────────
+   Another same-origin tab saved this board; fold its write into ours. A
+   merge, not a replace: this tab may hold edits still inside the save
+   debounce, and a replace would silently drop them. Deferred while a drag is
+   mid-air (the rebuild would yank the card) or a composer is open (the
+   rebuild recreates the textarea empty, and its blur guard would discard the
+   words) — the next settle applies the latest write. */
+
+let pendingExternal = null;
+
+function applyExternal(rawJson) {
+  if (drag || composerCol !== null) { pendingExternal = rawJson; return; }
+  let raw = null;
+  try { raw = JSON.parse(rawJson); } catch (err) { return; }
+  if (!raw) return;
+  const external = C.migrate(raw);
+  C.stampChanges(lastStamped, state); // pending local edits get their clocks first
+  state = C.merge(state, external);
+  lastStamped = clone(state);
+  render();
+  if (!panel.hidden) renderProjects();
+  if (!archiveEl.hidden) renderArchive();
+  if (!reportEl.hidden) renderReport(false);
+  // If this tab knew something the writer did not, put the union back into
+  // storage; the writer merges it to a no-op, so the bounce terminates.
+  if (JSON.stringify(C.syncable(state)) !== JSON.stringify(C.syncable(external))) save();
+}
+
+function flushExternal() {
+  if (pendingExternal != null) {
+    const raw = pendingExternal;
+    pendingExternal = null;
+    applyExternal(raw);
+  }
+  if (pendingRemote != null && sync) {
+    const p = pendingRemote;
+    pendingRemote = null;
+    applyRemote(p.remote, p.ver);
+  }
+}
+
+window.addEventListener('storage', e => {
+  if (e.key === KEY && e.newValue != null) applyExternal(e.newValue);
+});
+
+/* ── device sync ───────────────────────────────────────────
+   No accounts. A 256-bit secret pairs the devices; HKDF splits it into the
+   bearer token the relay sees and the AES key it never sees, so the relay
+   stores only ciphertext under a hash (see relay/worker.js and
+   docs/sync-spec.md). The engine pushes after every save, pulls on
+   focus/visibility, and holds a WebSocket so another device's edit lands
+   here in about a second. Everything converges through C.merge, and every
+   apply is a merge — never a replace. */
+
+const RELAY = 'https://kanban-relay.quiet-bush-25b1.workers.dev';
+const SYNC_KEY = NS ? `board.sync.${NS}` : 'board.sync';
+
+let sync = null;        // { secret, ver } — presence = the feature is on
+let syncKeys = null;    // { token, key } derived from the secret, cached
+let syncStatus = 'off'; // off | ok | syncing | offline | error
+let syncedAt = null;    // epoch ms of the last successful exchange
+let remoteHead = '';    // serialized syncable known to equal the server head
+// The floor: events and tombstones known to have reached the relay. Unioned
+// into every push, so no snapshot PUT — an import, an undo — can ever shrink
+// the log or drop a tombstone from the server (the log only grows).
+let floor = null;
+let pendingRemote = null;
+let pushTimer = null, pushing = false, pullQueued = false, pulling = false;
+let watchSock = null, watchRetry = 0;
+let uiDragLock = 0;     // column and project-row drags hold this
+
+try { sync = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null'); } catch (err) { /* off */ }
+
+function saveSyncConfig() {
+  try {
+    if (sync) localStorage.setItem(SYNC_KEY, JSON.stringify(sync));
+    else localStorage.removeItem(SYNC_KEY);
+  } catch (err) { /* sync still works this session */ }
+}
+
+async function ensureKeys() {
+  if (!syncKeys) syncKeys = await C.deriveSync(sync.secret);
+  return syncKeys;
+}
+
+async function relayFetch(method, body, opts = {}) {
+  const { token } = await ensureKeys();
+  return fetch(`${RELAY}/v1/board`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    keepalive: !!opts.keepalive,
+  });
+}
+
+function setSyncStatus(s) {
+  syncStatus = s;
+  renderSyncStatus();
+}
+
+/* One interaction barrier for every surface a rebuild would trample: card /
+   column / project drags, the composer, the open editor (its draft is a
+   stale clone — applying under it would let a later save clobber the remote
+   edit), an inline stage rename, a project rename, a report date edit.
+   Remote payloads are still fetched and queued; they apply on settle. */
+const syncBusy = () => !!drag || uiDragLock > 0 || composerCol !== null || !editor.hidden
+  || !!reportEl.querySelector('input[type="date"]')
+  || !!(document.activeElement && (
+    document.activeElement.classList.contains('col-name')
+    || document.activeElement.closest('#proj-list')));
+
+const syncableStr = st => C.canon(C.syncable(st));
+/** merge(x, x) is a no-op that normalizes ordering — for comparisons only. */
+const normalized = payload => C.canon(C.syncable(C.merge(payload, payload)));
+
+/** Fold a decrypted remote payload into the live board — a merge, never a
+    replace, deferred while the interaction barrier is up. */
+function applyRemote(remote, ver) {
+  if (!sync) return;
+  if ((remote.v || 2) > 2) { setSyncStatus('error'); return; } // a newer app wrote this
+  floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
+  if (syncBusy()) { pendingRemote = { remote, ver }; return; }
+  sync.ver = ver;
+  saveSyncConfig();
+  C.stampChanges(lastStamped, state); // pending local edits keep their clocks
+  const before = syncableStr(state);
+  const merged = C.merge(state, remote);
+  remoteHead = normalized(remote);
+  state = merged;
+  lastStamped = clone(state);
+  if (syncableStr(state) !== before) {
+    render();
+    if (!panel.hidden) renderProjects();
+    if (!archiveEl.hidden) renderArchive();
+    if (!reportEl.hidden) renderReport(false);
+  }
+  save(); // persist the union; schedules a push-back only if we knew more
+  setSyncStatus('ok');
+  syncedAt = Date.now();
+}
+
+function schedulePush(ms = 1200) {
+  if (!sync) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => push(), ms);
+}
+
+async function push(opts = {}) {
+  if (!sync) return;
+  if (pushing) { schedulePush(600); return; }
+  if (pendingRemote) { schedulePush(1000); return; } // merge the held remote first
+  // Never blind-write over a head this session has not seen: the floor is
+  // what guarantees a snapshot cannot shrink the relay's history.
+  if ((sync.ver || 0) > 0 && !floor) { schedulePush(1500); pull(); return; }
+  C.stampChanges(lastStamped, state);
+  lastStamped = clone(state);
+  if (floor) {
+    state = C.merge(state, {
+      columns: [], columnsMt: 0, projects: [], projectsMt: 0, tasks: [],
+      tombstones: floor.tombstones, events: floor.events,
+    });
+    lastStamped = clone(state);
+  }
+  if (syncableStr(state) === remoteHead) { setSyncStatus('ok'); return; }
+  pushing = true;
+  setSyncStatus('syncing');
+  try {
+    for (let attempt = 0; attempt < 3 && sync; attempt++) {
+      const payload = C.syncable(state);
+      const snap = C.canon(payload);
+      const { key } = await ensureKeys();
+      const env = await C.seal(key, payload);
+      const res = await relayFetch('PUT', { baseVer: sync.ver || 0, env }, opts);
+      if (res.status === 200) {
+        sync.ver = (await res.json()).ver;
+        saveSyncConfig();
+        remoteHead = snap;
+        floor = { events: payload.events, tombstones: payload.tombstones };
+        setSyncStatus('ok');
+        syncedAt = Date.now();
+        if (syncableStr(state) !== snap) schedulePush(300); // edits landed mid-flight
+        return;
+      }
+      if (res.status === 409) {
+        // Someone else wrote first: fold their head in, then retry from it.
+        const head = await res.json();
+        const remote = head.env ? await C.unseal(key, head.env) : null;
+        if (remote) applyRemote(remote, head.ver);
+        else { sync.ver = head.ver; saveSyncConfig(); }
+        if (pendingRemote) return; // the barrier holds the merge; settle resumes
+        continue;
+      }
+      if (res.status === 410) { syncLost(); return; }
+      if (res.status === 413) { setSyncStatus('error'); return; } // permanent until smaller
+      throw new Error(`relay ${res.status}`);
+    }
+  } catch (err) {
+    setSyncStatus('offline'); // wire or relay — either way, retry on the heartbeat
+  } finally {
+    pushing = false;
+  }
+}
+
+async function pull() {
+  if (!sync || pulling) { pullQueued = !!sync; return; }
+  pulling = true;
+  try {
+    const res = await relayFetch('GET');
+    if (res.status === 404) {
+      if ((sync.ver || 0) > 0) { syncLost(); return; }
+      schedulePush(0); // fresh enable — nothing on the server yet, seed it
+      return;
+    }
+    if (res.status === 410) { syncLost(); return; }
+    if (!res.ok) throw new Error(`relay ${res.status}`);
+    const { ver, env } = await res.json();
+    const { key } = await ensureKeys();
+    const remote = await C.unseal(key, env);
+    syncedAt = Date.now();
+    if (ver !== sync.ver) {
+      applyRemote(remote, ver);
+    } else {
+      floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
+      setSyncStatus('ok');
+      if (syncableStr(state) !== remoteHead) schedulePush(300);
+    }
+  } catch (err) {
+    setSyncStatus('offline');
+  } finally {
+    pulling = false;
+    if (pullQueued) { pullQueued = false; pull(); }
+  }
+}
+
+/* The live channel: the relay broadcasts {ver} on every accepted write, and
+   a newer ver triggers a pull. The socket stays open while the page is open
+   — hidden tabs included, so a laptop behind another window is current the
+   moment you look at it; a phone OS freezes the tab and the visibility pull
+   covers re-entry. */
+
+function connectWatch() {
+  if (!sync || watchSock) return;
+  ensureKeys().then(({ token }) => {
+    if (!sync || watchSock) return;
+    let ws;
+    try {
+      ws = new WebSocket(`${RELAY.replace(/^http/, 'ws')}/v1/board/watch`, ['kanban.v1', token]);
+    } catch (err) { return; }
+    watchSock = ws;
+    // `live` vs `synced` is the difference between "a change will arrive" and
+    // "I will go and ask", so the footer has to hear the socket settle.
+    ws.onopen = () => { watchRetry = 0; renderSyncStatus(); };
+    ws.onmessage = e => {
+      if (!sync) return;
+      let m;
+      try { m = JSON.parse(e.data); } catch (err) { return; }
+      if (m.deleted) { syncLost(); return; }
+      if (m.ver !== sync.ver) pull();
+    };
+    ws.onclose = () => {
+      if (watchSock !== ws) return;
+      watchSock = null;
+      renderSyncStatus();
+      if (sync) setTimeout(connectWatch, Math.min(30000, 1000 * 2 ** watchRetry++));
+    };
+    ws.onerror = () => { try { ws.close(); } catch (err) { /* closing */ } };
+  });
+}
+
+function dropWatch() {
+  if (!watchSock) return;
+  const ws = watchSock;
+  watchSock = null;   // onclose sees the mismatch and stays quiet
+  ws.onclose = null;
+  try { ws.close(); } catch (err) { /* closing */ }
+}
+
+/* Fallback heartbeat: only does work when the socket is down; also retries
+   any apply the interaction barrier deferred. */
+setInterval(() => {
+  if (!sync) return;
+  flushExternal();
+  if (!watchSock || watchSock.readyState !== 1) { connectWatch(); pull(); }
+}, 30000);
+
+document.addEventListener('visibilitychange', () => {
+  if (!sync) return;
+  if (document.hidden) {
+    // Best effort: get the last edits out before the tab is frozen.
+    flushPendingSave();
+    if (syncableStr(state) !== remoteHead) push({ keepalive: true });
+  } else {
+    connectWatch();
+    pull();
+  }
+});
+window.addEventListener('focus', () => { if (sync) { flushExternal(); pull(); } });
+window.addEventListener('online', () => { if (sync) { connectWatch(); pull(); } });
+// A tab closed inside the save debounce must not lose its last edit.
+window.addEventListener('pagehide', () => {
+  flushPendingSave();
+  if (sync && syncableStr(state) !== remoteHead) push({ keepalive: true });
+});
+
+/* ── sync lifecycle ───────────────────────────────────── */
+
+async function enableSync() {
+  sync = { secret: C.randomSecret(), ver: 0 };
+  syncKeys = null;
+  remoteHead = '';
+  floor = null;
+  saveSyncConfig();
+  await push();
+  if (!remoteHead) return false; // the first PUT never landed
+  connectWatch();
+  return true;
+}
+
+/** Forget the secret on this device only; other devices keep syncing. */
+function syncStopped(msg) {
+  dropWatch();
+  clearTimeout(pushTimer);
+  sync = null;
+  syncKeys = null;
+  remoteHead = '';
+  floor = null;
+  pendingRemote = null;
+  saveSyncConfig();
+  setSyncStatus('off');
+  if (!$('#sync').hidden) renderSync();
+  if (msg) toast(msg, null, 8000);
+}
+
+/* "Failure is quiet" is right for a dropped connection and wrong for a
+   permanent one. A board deleted from another device will never sync again,
+   and retrying it silently forever tells the user they are synced when they
+   are not — so this speaks once, then stops. */
+let saidSyncLost = false;
+function syncLost() {
+  dropWatch();
+  clearTimeout(pushTimer);
+  sync = null;
+  syncKeys = null;
+  remoteHead = '';
+  floor = null;
+  pendingRemote = null;
+  saveSyncConfig();
+  setSyncStatus('gone');
+  if (!$('#sync').hidden) { syncView = 'off'; renderSync(); }
+  if (!saidSyncLost) { saidSyncLost = true; toast(tr('syncLost'), null, 8000); }
+}
+
+/** Wipe the relay copy — durable: the slot answers 410 from then on, and
+    every synced device sees the broadcast and stops. */
+async function deleteFromServer() {
+  try { await relayFetch('DELETE'); } catch (err) { /* it may already be gone */ }
+  syncStopped(); // the sheet's own handler says what happened
+}
+
+const syncLink = () => {
+  const base = location.origin === 'null'
+    ? 'https://kanban.page/app/'
+    : location.origin + location.pathname + location.search; // keep ?ns=
+  return `${base}#sync=${sync.secret}`;
+};
+
+/* Second-device pairing: the #sync= link, which is the feature's whole
+   first-run experience on a phone — so it gets a state of the sheet rather
+   than a toast that evaporates. The secret stays in memory until adoption
+   succeeds, which is what makes "the link still works, try again" true.
+
+   A board still wearing its first-run seed marker is replaced outright:
+   merging would leak the starter card into the real board. Anything else
+   merges — a union, so nothing is lost. Both paths offer Undo anyway: the
+   seed marker is a marker, and the cost of being wrong is somebody's board. */
+let pendingSecret = null;
+
+async function adoptFromLink(secret) {
+  pendingSecret = secret;
+  const pristine = state.seed === true;
+  const before = clone(state);
+  syncView = 'adopting';
+  if ($('#sync').hidden) openSync('adopting'); else renderSync();
+
+  sync = { secret, ver: 0 };
+  syncKeys = null;
+  remoteHead = '';
+  floor = null;
+  try {
+    if (C.b64uToBytes(secret).length !== 32) throw Object.assign(new Error('bad secret'), { gone: true });
+    const res = await relayFetch('GET');
+    if (res.status === 410 || res.status === 404) {
+      // 404 with a fresh secret can only mean the link's board is gone: a
+      // link is only ever handed out after its first PUT.
+      throw Object.assign(new Error('no board'), { gone: true });
+    }
+    if (!res.ok) throw new Error(`relay ${res.status}`);
+    const { ver, env } = await res.json();
+    const { key } = await ensureKeys();
+    const remote = await C.unseal(key, env);
+    if ((remote.v || 2) > 2) throw Object.assign(new Error('newer schema'), { gone: true });
+
+    if (pristine) {
+      state = C.migrate({ ...state, ...remote });
+      delete state.seed;
+      lastStamped = clone(state);
+      sync.ver = ver;
+      remoteHead = normalized(remote);
+      floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
+      save();
+      render();
+      setSyncStatus('ok');
+      syncedAt = Date.now();
+    } else {
+      applyRemote(remote, ver);
+    }
+    saveSyncConfig();   // only now: adoption succeeded
+    pendingSecret = null;
+    connectWatch();
+    syncView = 'on';
+    renderSync();
+
+    const n = state.tasks.filter(onBoard).length;
+    toast(pristine ? tr('paired', { n }) : tr('merged'), () => {
+      // back the link out entirely: the board it replaced, and no secret
+      syncStopped();
+      state = before;
+      lastStamped = clone(state);
+      save();
+      render();
+      syncView = 'off';
+      renderSync();
+    });
+  } catch (err) {
+    sync = null;
+    syncKeys = null;
+    saveSyncConfig();
+    syncFailMsg = err && err.gone ? 'gone' : 'offline';
+    syncView = 'failed';
+    setSyncStatus('off');
+    if ($('#sync').hidden) openSync('failed'); else renderSync();
+  }
+}
+
 
 const byId = id => state.tasks.find(t => t.id === id);
 const projectOf = t => state.projects.find(p => p.id === t.projectId) || null;
@@ -563,6 +1042,7 @@ function closeComposer({ discard = false } = {}) {
   composerCol = null;
   if (title) addTask({ title, columnId: colId }); // addTask saves and renders
   else render();
+  flushExternal();
 }
 
 function nudge(id, key) {
@@ -885,7 +1365,7 @@ function endDrag() {
   render(); // settle the real board first, so the ghost has a true rect to fly to
 
   const landed = board.querySelector(`.card[data-id="${movedId}"]`);
-  if (!landed || stillMotion.matches) { wrap.remove(); return; }
+  if (!landed || stillMotion.matches) { wrap.remove(); flushExternal(); return; }
 
   // Hold the real card back until the ghost has landed on it — otherwise both
   // are on screen for the length of the flight and the card appears twice.
@@ -898,9 +1378,13 @@ function endDrag() {
     [{ transform: from }, { transform: `translate3d(${r.left}px, ${r.top}px, 0) rotate(0deg)` }],
     { duration: dist < 24 ? 120 : 220, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'forwards' }
   );
+  let flightDone = false;
   const settle = () => {
+    if (flightDone) return;
+    flightDone = true;
     wrap.remove();
     landed.classList.remove('landing');
+    flushExternal(); // a tab write held back during the drag lands after the flight
   };
   flight.finished.then(settle).catch(settle);
   // animations pause in a backgrounded tab, so `finished` may never arrive —
@@ -936,6 +1420,10 @@ function addColumn() {
 function deleteColumn(id) {
   if (state.columns.length <= 1) return;
   snapshot();
+  // The tombstone carries the delete to other devices; undo restamps the
+  // restored column past it, so undo still wins after a sync.
+  state.tombstones = state.tombstones || {};
+  state.tombstones[id] = Math.max(Date.now(), C.clockMax(state) + 1);
   state.columns = state.columns.filter(c => c.id !== id);
   save();
   render();
@@ -978,6 +1466,7 @@ function dragColumn(ev, srcCol) {
   board.classList.add('dragging');
   document.body.style.cursor = 'grabbing';
   document.body.style.userSelect = 'none';
+  uiDragLock++; // a remote apply mid-drag would rebuild the board under the ghost
 
   const ox = ev.clientX - r.left;
   let lastX = ev.clientX, px = ev.clientX, vx = 0, raf = null;
@@ -1039,6 +1528,7 @@ function dragColumn(ev, srcCol) {
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
 
+    uiDragLock--;
     const order = cols().map(x => x.dataset.id);
     const was = state.columns.map(x => x.id).join();
     // snapshot before the mutation, and only when it is a real move: stage
@@ -1053,7 +1543,7 @@ function dragColumn(ev, srcCol) {
     const landed = board.querySelector(`.col[data-id="${id}"]`);
 
     let settled = false;
-    const settle = () => { if (settled) return; settled = true; wrap.remove(); };
+    const settle = () => { if (settled) return; settled = true; wrap.remove(); flushExternal(); };
     if (stillMotion.matches || !landed) { settle(); return; }
 
     const target = landed.getBoundingClientRect();
@@ -1184,6 +1674,7 @@ function closeEditor() {
   editing = null;
   draft = null;
   syncScrim();
+  flushExternal(); // the editor was a sync barrier; apply what it held back
 }
 
 $('#f-save').onclick = saveEditor;
@@ -1279,6 +1770,8 @@ function renderProjects() {
       $('.swatch', row).onclick = () => { openSwatch = p.id; renderProjects(); };
       $('.icon', row).onclick = () => {
         snapshot();
+        state.tombstones = state.tombstones || {};
+        state.tombstones[p.id] = Math.max(Date.now(), C.clockMax(state) + 1);
         state.projects = state.projects.filter(x => x.id !== p.id);
         state.tasks.forEach(t => { if (t.projectId === p.id) t.projectId = null; });
         if (state.filter === p.id) state.filter = null;
@@ -1324,6 +1817,7 @@ function dragProjectRow(ev, srcRow) {
   row.classList.add('drag-src');
   document.body.style.cursor = 'grabbing';
   document.body.style.userSelect = 'none';
+  uiDragLock++; // a remote apply mid-drag would rebuild the list under the ghost
 
   const oy = ev.clientY - r.top;
   let lastY = ev.clientY, py = ev.clientY, vy = 0, raf = null;
@@ -1383,6 +1877,7 @@ function dragProjectRow(ev, srcRow) {
     cancelAnimationFrame(raf);
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
+    uiDragLock--;
 
     const order = [...list.querySelectorAll('.prow')].map(x => x.dataset.id);
     const before = state.projects.map(x => x.id).join();
@@ -1398,6 +1893,7 @@ function dragProjectRow(ev, srcRow) {
       settled = true;
       wrap.remove();
       renderProjects();
+      flushExternal();
     };
     if (stillMotion.matches) { settle(); return; }
 
@@ -1533,6 +2029,231 @@ archEmptyBtn.onclick = () => {
 
 $('[data-close]', archiveEl).onclick = closeArchive;
 
+/* ── sync sheet ────────────────────────────────────────────
+   One shell, four states: off (the pitch and Enable), on (the QR, the link
+   and the two exits), adopting (a #sync= link is being opened on this
+   device) and failed. `syncView` says which. No standing chrome anywhere
+   else — the board itself is the status display, and cards arriving is what
+   "sync works" looks like; the ⋯ menu's tick is how a user learns, months
+   later, that this board leaves the machine. */
+
+const syncEl = $('#sync');
+let syncView = 'off';       // off | on | adopting | failed
+let syncFailMsg = null;     // which failure the failed view explains
+let syncingSince = 0;       // when the in-flight push started
+
+$('[data-close]', syncEl).innerHTML = ICON.close;
+$('#sync-copy').innerHTML = ICON.copy;
+
+/** Santiago, like every other date in the app: a second device-local clock
+    could disagree with the day boundary printed beside it. */
+const SYNC_CLOCK = new Intl.DateTimeFormat('en-GB',
+  { timeZone: C.TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+
+function syncWhen(ms) {
+  const day = C.ymd(ms), today = C.ymd();
+  if (day === today) return SYNC_CLOCK.format(new Date(ms));
+  if (day === C.addDays(today, -1)) return tr('yesterday');
+  return day;
+}
+
+/** The footer reports OUTBOUND only. An inbound change explains itself by
+    moving the board (see flip()), and a status line flickering every time
+    the phone saves would undo that explanation. */
+function syncStatusLine() {
+  if (syncView === 'adopting') return tr('pairingStatus');
+  if (syncView === 'failed') return syncFailMsg === 'gone' ? tr('linkNotFound') : tr('syncNoAnswer');
+  if (!sync) return '';
+  switch (syncStatus) {
+    // below ~400ms the round trip is invisible and the timestamp is the news
+    case 'syncing': return Date.now() - syncingSince > 400 ? tr('syncing') : lastStatusText;
+    case 'offline': return tr('syncOffline');
+    case 'gone': return tr('syncGone');
+    case 'error': return tr('syncTooBig');
+    default: {
+      const when = syncedAt ? syncWhen(syncedAt) : '';
+      if (!when) return '';
+      // `live` means the socket is genuinely open, never optimism: a change
+      // on the other device will arrive here without anyone asking.
+      const live = watchSock && watchSock.readyState === 1;
+      return tr(live ? 'syncLive' : 'syncedAt', { when });
+    }
+  }
+}
+
+let lastStatusText = '';
+
+function renderSyncStatus() {
+  if (syncEl.hidden) return;
+  const el = $('#sync-status');
+  const next = syncStatusLine();
+  lastStatusText = next;
+  // role="status" re-announces on every assignment, so only write on change
+  if (el.textContent !== next) el.textContent = next;
+}
+
+/* The QR encoder is a quarter of the app's JavaScript for a feature most
+   boards never turn on, so it arrives when the sheet first needs to draw
+   one — a plain classic script from the same directory, so `file:` keeps
+   working. If it cannot load, the link column stands alone: the QR is never
+   load-bearing. */
+let qrLoad = null;
+function ensureQr() {
+  if (window.qrcodegen) return Promise.resolve(true);
+  if (!qrLoad) {
+    qrLoad = new Promise(resolve => {
+      const s = document.createElement('script');
+      s.src = 'qr.js';
+      s.onload = () => resolve(!!window.qrcodegen);
+      s.onerror = () => resolve(false);
+      document.head.append(s);
+    });
+  }
+  return qrLoad;
+}
+
+/** One inline SVG, one path. Graphite on white in both themes. */
+function qrSvg(text) {
+  const qr = qrcodegen.QrCode.encodeText(text, qrcodegen.QrCode.Ecc.MEDIUM);
+  let d = '';
+  for (let y = 0; y < qr.size; y++) {
+    for (let x = 0; x < qr.size; x++) if (qr.getModule(x, y)) d += `M${x} ${y}h1v1h-1z`;
+  }
+  return `<svg viewBox="0 0 ${qr.size} ${qr.size}" role="img" aria-label="${tr('pairingLink')}"`
+    + ` shape-rendering="crispEdges"><path d="${d}"/></svg>`;
+}
+
+function renderSync() {
+  if (syncEl.hidden) return;
+  const view = syncView;
+  const say = $('#sync-say');
+
+  $('#sync-pair').hidden = view !== 'on';
+  say.hidden = view === 'on';
+  say.textContent = view === 'adopting' ? tr('adopting')
+    : view === 'failed' ? tr(syncFailMsg === 'gone' ? 'adoptBadLink' : 'adoptOffline')
+    : tr('syncPitch');
+
+  $('#sync-enable').hidden = view !== 'off';
+  $('#sync-enable').textContent = tr('enableSync');
+  $('#sync-retry').hidden = !(view === 'failed' && syncFailMsg === 'offline');
+  $('#sync-retry').textContent = tr('tryAgain');
+  $('#sync-stop').hidden = view !== 'on';
+  $('#sync-stop').textContent = tr('stopSync');
+  const del = $('#sync-del');
+  del.hidden = view !== 'on';
+  del.textContent = armed.has('sync-delete')
+    ? `${tr('deleteFromServer')} — ${tr('sure')}`
+    : tr('deleteFromServer');
+  del.classList.toggle('armed', armed.has('sync-delete'));
+
+  if (view === 'on') {
+    const link = syncLink();
+    $('#sync-scan').textContent = tr('syncScanLine');
+    $('#sync-url').value = link;
+    $('#sync-warn').textContent = tr('syncWarning');
+    const plate = $('#sync-qr');
+    ensureQr().then(ok => {
+      // the sheet may have moved on while the script loaded
+      if (syncEl.hidden || syncView !== 'on') return;
+      plate.hidden = !ok;
+      if (ok) plate.innerHTML = qrSvg(syncLink());
+    });
+  }
+
+  renderSyncStatus();
+}
+
+function openSync(view) {
+  closeComposer();
+  disarm();
+  syncView = view || (sync ? 'on' : 'off');
+  syncEl.hidden = false;
+  scrim.hidden = false;
+  renderSync();
+  requestAnimationFrame(() => {
+    if (syncView === 'on') { const u = $('#sync-url'); u.focus(); u.select(); }
+    else if (syncView === 'off') $('#sync-enable').focus();
+  });
+}
+
+function closeSync() {
+  syncEl.hidden = true;
+  disarm();
+  // A failed adopt leaves nothing behind: next time this is the off state.
+  if (syncView !== 'on') syncView = sync ? 'on' : 'off';
+  syncScrim();
+}
+
+$('[data-close]', syncEl).onclick = closeSync;
+
+$('#sync-enable').onclick = async () => {
+  const b = $('#sync-enable');
+  b.disabled = true;
+  syncingSince = Date.now();
+  setSyncStatus('syncing');
+  const ok = await enableSync();
+  b.disabled = false;
+  if (!ok) { toast(tr('syncFailed')); syncStopped(); renderSync(); return; }
+  syncView = 'on';
+  renderSync();
+};
+
+$('#sync-retry').onclick = () => {
+  if (!pendingSecret) { closeSync(); return; }
+  adoptFromLink(pendingSecret);
+};
+
+/* Copy confirms in place, the way the editor's session line does — no toast.
+   Every copy in this app with a surface to show a state uses it. */
+$('#sync-copy').onclick = async () => {
+  if (!sync) return;
+  const ok = await copyText(syncLink());
+  if (!ok) { toast(tr('couldNotCopy')); return; }
+  const wrap = $('#sync-url-wrap');
+  const btn = $('#sync-copy');
+  wrap.classList.add('copied');
+  btn.innerHTML = ICON.check;
+  setTimeout(() => { wrap.classList.remove('copied'); btn.innerHTML = ICON.copy; }, 1200);
+};
+
+/* Stopping forgets this device's key: the board stays whole and local, and
+   other devices keep syncing. No card is lost, so an armed confirm would be
+   ceremony — but the secret may exist nowhere else, so it takes the app's
+   other safety idiom instead. undo() cannot serve: it restores board state,
+   and the secret lives outside state by design. */
+$('#sync-stop').onclick = () => {
+  const was = sync;
+  syncStopped();
+  syncView = 'off';
+  renderSync();
+  toast(tr('syncStopped'), () => {
+    sync = was;
+    syncKeys = null;
+    remoteHead = '';
+    floor = null;
+    saveSyncConfig();
+    connectWatch();
+    pull();
+    syncView = 'on';
+    renderSync();
+  });
+};
+
+/* Deleting the server copy ends sync on every device, so it takes the
+   archive's armed two-step — and no Undo, because undoing means a network
+   write that can itself fail, and a recovery that may not work is worse
+   than none. It must also forget the local secret, or this device's push
+   loop would recreate the blob and the delete would look broken. */
+$('#sync-del').onclick = async () => {
+  if (!armed.has('sync-delete')) { arm('sync-delete', renderSync); return; }
+  disarm();
+  await deleteFromServer();
+  syncView = 'off';
+  renderSync();
+  toast(tr('serverDeleted'));
+};
+
 /* ── menu, backup, theme ───────────────────────────────── */
 
 $('#menuBtn').onclick = e => {
@@ -1564,6 +2285,7 @@ menu.addEventListener('click', e => {
   if (act === 'archive-last') archiveLastColumn();
   if (act === 'export') exportBackup();
   if (act === 'import') $('#importFile').click();
+  if (act === 'sync') openSync();
 });
 
 // The menu is the only place that names the last stage, so label it live.
@@ -1574,6 +2296,9 @@ $('#menuBtn').addEventListener('click', () => {
     ? `${tr('archiveVerb')} ${col.name.toLowerCase()}${n ? ` (${n})` : ''}`
     : tr('archiveFinished');
   $('#act-density').setAttribute('aria-pressed', String(state.density === 'compact'));
+  // The one place sync has standing presence: without it, someone who paired
+  // three months ago has no way to learn this board leaves the machine.
+  $('#act-sync').setAttribute('aria-pressed', String(!!sync));
 });
 
 function toggleTheme() {
@@ -1607,7 +2332,11 @@ $('#importFile').addEventListener('change', async e => {
     const next = JSON.parse(await file.text());
     if (!Array.isArray(next.columns) || !Array.isArray(next.tasks)) throw new Error('shape');
     snapshot();
-    state = C.migrate(next); // also upgrades a v1 backup on the way in
+    const incoming = C.migrate(next); // also upgrades a v1 backup on the way in
+    // While synced, importing MERGES. A replace would push a snapshot that
+    // shrinks the relay's event log — and the log is the only copy of the
+    // history, so no import may be able to truncate it for every device.
+    state = sync ? C.merge(incoming, state) : incoming;
     save();
     render();
     toast(`Imported ${state.tasks.length} tasks`, undo);
@@ -1672,6 +2401,12 @@ function deleteForever(ids) {
   if (!ids.length) return;
   snapshot();
   const gone = new Set(ids);
+  // Tombstones carry the delete to other devices — ids only, never content:
+  // a tombstone must not preserve what the user deliberately destroyed. The
+  // clock outruns everything observed, so no stale copy can outvote it.
+  const at = Math.max(Date.now(), C.clockMax(state) + 1);
+  state.tombstones = state.tombstones || {};
+  ids.forEach(id => { state.tombstones[id] = at; });
   state.tasks = state.tasks.filter(t => !gone.has(t.id));
   save();
   render();
@@ -1719,7 +2454,7 @@ function hideToast() {
 
 function syncScrim() {
   const was = scrim.hidden;
-  scrim.hidden = editor.hidden && panel.hidden && reportEl.hidden && archiveEl.hidden;
+  scrim.hidden = editor.hidden && panel.hidden && reportEl.hidden && archiveEl.hidden && syncEl.hidden;
   // A scrim that has just appeared has not been pressed yet. See below.
   if (was && !scrim.hidden) scrimPressed = false;
 }
@@ -1746,7 +2481,7 @@ scrim.onclick = () => {
   // bails to closeEditor() on an empty title, so an accidental open costs
   // nothing. Esc and the ✕ remain the deliberate ways to throw work away.
   if (!editor.hidden) saveEditor(); else closeEditor();
-  closeProjects(); closeReport(); closeArchive();
+  closeProjects(); closeReport(); closeArchive(); closeSync();
 };
 
 qInput.addEventListener('input', () => {
@@ -1765,7 +2500,7 @@ const RESUME = /\b(?:claude|codex)\b.*\bresume\b/i;
 
 document.addEventListener('paste', e => {
   if (/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable) return;
-  if (!editor.hidden || !panel.hidden || !reportEl.hidden || !archiveEl.hidden) return;
+  if (!editor.hidden || !panel.hidden || !reportEl.hidden || !archiveEl.hidden || !syncEl.hidden) return;
 
   const text = (e.clipboardData || window.clipboardData).getData('text') || '';
   const line = text.split('\n').map(s => s.trim()).find(s => RESUME.test(s));
@@ -1787,6 +2522,7 @@ document.addEventListener('keydown', e => {
     if (!reportEl.hidden) { closeReport(); return; }
     if (!panel.hidden) { closeProjects(); return; }
     if (!archiveEl.hidden) { closeArchive(); return; }
+    if (!syncEl.hidden) { closeSync(); return; }
     closeComposer();
     return;
   }
@@ -1802,8 +2538,10 @@ document.addEventListener('keydown', e => {
   }
 
   // On an empty board the only sensible action is "write something", so any
-  // character starts the first card instead of firing a shortcut.
-  if (boardIsEmpty() && e.key.length === 1 && editor.hidden && panel.hidden && reportEl.hidden) {
+  // character starts the first card instead of firing a shortcut — unless a
+  // panel is open, where the keystroke belongs to whatever is on screen.
+  if (boardIsEmpty() && e.key.length === 1
+    && editor.hidden && panel.hidden && reportEl.hidden && archiveEl.hidden && syncEl.hidden) {
     e.preventDefault();
     openComposer(state.columns[0].id);
     const ta = $('.composer textarea', board);
@@ -2018,6 +2756,7 @@ function editDay(row, entry) {
     const gone = !C.contains(repWeek, day);
     renderReport(false);
     if (gone) toast(`Moved to ${C.weekLabel(C.mondayOf(day))}`, undo);
+    flushExternal(); // the date input was a sync barrier
   };
 
   input.addEventListener('change', commit);
@@ -2105,6 +2844,30 @@ window.__board = {
   get repEntries() { return repEntries; },
   get repWeek() { return repWeek; },
   set repWeek(v) { repWeek = v; },
+  get sync() { return sync; },
 };
 
 render();
+
+/* Sync starts last, once there is a board on screen to sync. A `#sync=` link
+   opens the sheet in its adopting state on this same paint, so the first-run
+   demo card never flashes and vanishes behind it. */
+
+function adoptFromHash() {
+  const m = location.hash.match(/[#&]sync=([A-Za-z0-9_-]{43})/);
+  if (!m) return false;
+  // The secret must not linger in the URL bar, in history, or in whatever the
+  // phone's share sheet would copy.
+  history.replaceState(null, '', location.pathname + location.search);
+  adoptFromLink(m[1]);
+  return true;
+}
+
+// Pasting a pairing link into a tab that already has the board open is a hash
+// change, not a load — no reload, so the boot path below never sees it.
+window.addEventListener('hashchange', adoptFromHash);
+
+if (!adoptFromHash() && sync) {
+  connectWatch();
+  pull();
+}

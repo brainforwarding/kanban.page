@@ -637,6 +637,32 @@ frame.addEventListener('load', async function run() {
     await sleep(120);
   });
 
+  await test('a write from another tab appears on the board without losing local work', async () => {
+    await reset();
+    W.addTask({ title: 'Local card' });
+    await sleep(250); // past the save debounce, so the local card is stamped
+    // This page is that "other tab": same origin, same storage — writing the
+    // key here fires a real storage event inside the app's window.
+    const copy = JSON.parse(W.localStorage.getItem('board.v2.test'));
+    // The write deliberately LACKS the local card — a stale tab that never saw
+    // it. Only a real merge keeps both; a naive replace would eat the local one.
+    copy.tasks = [{
+      id: 'from-other-tab', title: 'Remote card', notes: '', projectId: null,
+      session: '', flag: false, columnId: copy.columns[1].id, order: 0,
+      createdAt: Date.now(), updatedAt: Date.now(), mt: Date.now(),
+    }];
+    localStorage.setItem('board.v2.test', JSON.stringify(copy));
+    await sleep(120);
+    localStorage.removeItem('board.v2.test'); // this page must not keep the key
+    assert(colOf('Remote card'), 'the other tab\'s card rendered here');
+    assert(colOf('Local card'), 'and the local card survived the merge');
+    eq(W.__board.state.tasks.length, 3, 'demo + local + remote — the merge lost nothing');
+  });
+
+  await test('sync stays inert without a secret — no config key, engine off', async () => {
+    eq(W.localStorage.getItem('board.sync.test'), null, 'no sync config was created');
+  });
+
   /* ── done ───────────────────────────────────────────── */
 
   W.localStorage.removeItem('board.v2.test');

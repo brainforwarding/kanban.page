@@ -1084,7 +1084,10 @@ kbd {
   border: 1px solid var(--line);
   border-radius: 999px;
   box-shadow: var(--sh-2);
-  font: 400 12.5px/1 var(--ui);
+  /* Sync brings the longest strings in the app — a message plus Undo can pass
+     370px, which overflowed a 360px phone. */
+  max-width: min(calc(100vw - 24px), 420px);
+  font: 400 12.5px/1.35 var(--ui);
   color: var(--muted);
   animation: toastIn .26s var(--ease) both;
 }
@@ -1092,7 +1095,9 @@ kbd {
 .toast.out { animation: toastOut .18s ease-in both; }
 @keyframes toastOut { to { opacity: 0; transform: translateX(-50%) translateY(8px) } }
 
+.toast #toast-msg { min-width: 0; }
 .toast button {
+  flex: none;
   padding: 5px 12px;
   border-radius: 999px;
   background: var(--raise);
@@ -1342,6 +1347,39 @@ button[disabled] { opacity: .4; pointer-events: none; }
    ".pill.add", ".pill.flagpill", ".icon.sm" and
    "[data-density=compact] .chip" are the other (0,2,0) rules that bite. */
 
+/* ── sync ──────────────────────────────────────────────── */
+
+.sync-say  { margin: 0; font: 400 12.5px/1.6 var(--ui); color: var(--muted); }
+.sync-line { margin: 0; font: 400 12.5px/1.5 var(--ui); color: var(--muted); }
+/* A property of the feature, not an error — so --faint prose, never --danger:
+   painting an intended state red makes a working screen look broken. */
+.sync-warn { margin: 0; font: 400 12px/1.5 var(--ui); color: var(--faint); }
+
+/* Centred, not top-aligned: the QR is taller than the words beside it, and
+   hanging them from the top leaves the sheet looking half-filled. */
+.sync-pair { display: flex; gap: 16px; align-items: center;
+             animation: cardIn .24s var(--ease) both; }
+.sync-link { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+/* readonly, so its own horizontal scroll is the truncation: the start of the
+   URL is the recognisable part and the rest can be scrolled to and verified */
+#sync-url { text-overflow: clip; }
+
+/* A QR is read by a camera, not by a reader: it keeps its own light ground in
+   both themes and nothing ever dims it — an inverted or tinted code fails on
+   a large share of camera apps. The padding is the quiet zone the format
+   requires; the border is what gives the plate an edge in light mode, where
+   white sits on white. */
+.qr {
+  flex: none;
+  width: 200px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #FFFFFF;
+}
+.qr svg { display: block; width: 100%; height: auto; }
+.qr path { fill: #14131A; }
+
 /* ── input: no hover ───────────────────────────────────── */
 /* A finger never hovers, so every control a mouse reveals on :hover simply
    does not exist on a phone — and worse, opacity:0 still hit-tests, so they
@@ -1534,6 +1572,21 @@ button[disabled] { opacity: .4; pointer-events: none; }
   #rep-all  { order: 1; }
   #rep-copy { order: 4; flex: 1 1 0; }
   #rep-save { order: 5; flex: 1 1 0; }
+
+  /* On a phone the QR is the less useful half — you cannot scan your own
+     screen — so the link and its copy button come first. */
+  .sync-pair { flex-direction: column; align-items: stretch; }
+  .qr { order: 2; align-self: center; width: min(200px, 62vw); }
+
+  /* Same technique as the report footer: the existing .grow is the line break. */
+  /* The status takes the first line and the buttons the second, keeping the
+     right edge they have on a wide screen instead of sliding to the left
+     margin once they wrap. The status owning a full-width row is what forces
+     the break, so the .grow spacer has nothing left to do. */
+  #sync .sheet-foot { flex-wrap: wrap; row-gap: 10px; justify-content: flex-end; }
+  #sync .sheet-foot .count { order: 1; flex: 1 0 100%; }
+  #sync .sheet-foot .grow  { display: none; }
+  #sync .sheet-foot button { order: 2; }
 
   .sheet, .sheet.wide {
     top: auto;

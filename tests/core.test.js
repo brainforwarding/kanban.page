@@ -637,3 +637,354 @@ test('sortByProject groups each column into project order, stably, unassigned la
   assert.equal(seq('c1'), 'cadb'); // p1 first, then p2 keeping a before d, unassigned last
   assert.equal(seq('c2'), 'fe');   // every column gets the treatment
 });
+
+/* ── sync: clocks and merge ────────────────────────────── */
+
+const cols = names => names.map((name, i) => ({ id: `c${i + 1}`, name }));
+// defaultBoard() mints fresh column ids on every call, which would read as a
+// reorder in every comparison — these boards share one stable stage set.
+const board = over => ({ ...C.defaultBoard(), columns: cols(['X', 'Done']), ...over });
+const task = (id, over) => ({
+  id, title: id, notes: '', projectId: null, session: '', flag: false,
+  columnId: 'c1', order: 0, createdAt: 1000, updatedAt: 1000, ...over,
+});
+
+test('stampChanges stamps exactly what changed, and only that', () => {
+  const prev = board({ tasks: [task('a'), task('b')], columns: cols(['X']), projects: [] });
+  const next = board({
+    tasks: [{ ...task('a'), title: 'edited' }, task('b'), task('fresh')],
+    columns: cols(['X']),
+    projects: [],
+  });
+  C.stampChanges(prev, next, 5000);
+  assert.equal(next.tasks.find(t => t.id === 'a').mt, 5000);   // edited
+  assert.equal(next.tasks.find(t => t.id === 'b').mt, undefined); // untouched
+  assert.equal(next.tasks.find(t => t.id === 'fresh').mt, 5000);  // new
+  assert.equal(next.columnsMt, undefined);  // arrays identical → clock untouched
+  assert.equal(next.projectsMt, undefined);
+});
+
+test('stampChanges: a rename stamps the item, a reorder stamps the vector', () => {
+  const prev = board({ columns: cols(['A', 'B']), projects: [{ id: 'p', name: 'P', color: '#fff' }] });
+  // same ids, one renamed → item clock moves, the order vector's does not
+  const renamed = board({ columns: cols(['A', 'Z']), projects: [{ id: 'p', name: 'Q', color: '#fff' }] });
+  C.stampChanges(prev, renamed, 7000);
+  assert.equal(renamed.columns[1].mt, 7000);
+  assert.equal(renamed.columnsMt, undefined); // rename cannot drag the done line
+  assert.equal(renamed.projects[0].mt, 7000);
+
+  // reordered ids → the vector clock moves
+  const reordered = board({ columns: [{ id: 'c2', name: 'B' }, { id: 'c1', name: 'A' }] });
+  C.stampChanges(board({ columns: cols(['A', 'B']) }), reordered, 8000);
+  assert.equal(reordered.columnsMt, 8000);
+});
+
+test('stampChanges is a logical clock: it always outruns everything observed', () => {
+  // a device with a FAST clock stamped mt far in the future; a later edit on
+  // a correct-clock device must still win, so its stamp jumps past
+  const prev = board({ tasks: [task('t', { mt: 9999999999999 })] });
+  const next = board({ tasks: [{ ...task('t', { mt: 9999999999999 }), title: 'later edit' }] });
+  C.stampChanges(prev, next, 1000); // "now" is far behind the observed clock
+  assert.ok(next.tasks[0].mt > 9999999999999);
+});
+
+test('stampChanges clears the first-run seed on the first real change', () => {
+  const prev = board({ tasks: [task('t')] });
+  const next = board({ tasks: [{ ...task('t'), title: 'touched' }] });
+  next.seed = true;
+  C.stampChanges(prev, next, 5000);
+  assert.equal(next.seed, undefined);
+  const quiet = board({ tasks: [task('t')] });
+  quiet.seed = true;
+  C.stampChanges(board({ tasks: [task('t')] }), quiet, 5000);
+  assert.equal(quiet.seed, true); // nothing changed → still replaceable
+});
+
+test('stampChanges stamps a rewritten event but never an appended one', () => {
+  const e1 = { id: 'e1', taskId: 'a', day: '2026-03-09', at: 1, to: 'X' };
+  const prev = board({ events: [e1] });
+  const next = board({ events: [{ ...e1, day: '2026-03-10' }, { id: 'e2', taskId: 'a', day: '2026-03-11', at: 2, to: 'Y' }] });
+  C.stampChanges(prev, next, 9000);
+  assert.equal(next.events[0].mt, 9000);
+  assert.equal(next.events[1].mt, undefined);
+});
+
+test('merge: the newer edit of a task wins whole-row, either way round', () => {
+  const base = board({ columns: cols(['X']) });
+  const a = { ...base, tasks: [task('t', { title: 'from A', mt: 2000, columnId: 'c1' })] };
+  const b = { ...base, tasks: [task('t', { title: 'from B', mt: 3000, columnId: 'c1' })] };
+  assert.equal(C.merge(a, b).tasks[0].title, 'from B');
+  assert.equal(C.merge(b, a).tasks[0].title, 'from B');
+});
+
+test('merge: converges to identical synced state from both directions', () => {
+  const a = board({
+    columns: cols(['X', 'Y']), columnsMt: 10,
+    tasks: [task('one', { mt: 5 }), task('both', { title: 'a-side', mt: 8 })],
+    events: [{ id: 'e1', taskId: 'one', day: '2026-01-05', at: 1, to: 'X' }],
+  });
+  const b = board({
+    columns: cols(['X', 'Y', 'Z']), columnsMt: 20,
+    tasks: [task('two', { mt: 6 }), task('both', { title: 'b-side', mt: 8 })],
+    events: [{ id: 'e2', taskId: 'two', day: '2026-01-06', at: 2, to: 'Y' }],
+  });
+  const ab = C.syncable(C.merge(a, b));
+  const ba = C.syncable(C.merge(b, a));
+  assert.deepEqual(ab, ba);
+  assert.equal(ab.tasks.length, 3);
+  assert.equal(ab.events.length, 2);
+  assert.equal(ab.columns.length, 3); // higher columnsMt won
+});
+
+test('merge: a tombstone deletes the task and survives in the union', () => {
+  const a = board({ tasks: [task('gone', { mt: 1000 })] });
+  const b = board({ tombstones: { gone: 2000 } });
+  const m = C.merge(a, b);
+  assert.equal(m.tasks.length, 0);
+  assert.equal(m.tombstones.gone, 2000);
+});
+
+test('merge: an edit stamped after the delete resurrects the task', () => {
+  // undo restamps what it brings back, so this is also the undo-after-sync path
+  const a = board({ tasks: [task('back', { title: 'edited after delete', mt: 3000 })] });
+  const b = board({ tombstones: { back: 2000 } });
+  const m = C.merge(a, b);
+  assert.equal(m.tasks.length, 1);
+  assert.equal(m.tasks[0].title, 'edited after delete');
+  assert.equal(m.tombstones.back, 2000); // kept, inert against the newer mt
+});
+
+test('merge: prefs never cross — local theme, density and filter survive', () => {
+  const a = board({ theme: 'dark', density: 'compact', filter: 'p1', flagFilter: true });
+  const b = board({ theme: 'light', density: 'comfortable' });
+  const m = C.merge(a, b);
+  assert.equal(m.theme, 'dark');
+  assert.equal(m.density, 'compact');
+  assert.equal(m.filter, 'p1');
+  assert.equal(m.flagFilter, true);
+});
+
+test('merge: tasks stranded by a losing stage rehome by name, then first column', () => {
+  const a = board({
+    columns: [{ id: 'a1', name: 'Inbox' }, { id: 'a2', name: 'Doing' }], columnsMt: 100,
+    tasks: [],
+  });
+  const b = board({
+    columns: [{ id: 'b1', name: 'Inbox' }, { id: 'b2', name: 'Doing' }], columnsMt: 50,
+    tasks: [task('x', { columnId: 'b2', mt: 60 }), task('y', { columnId: 'b9', mt: 60 })],
+  });
+  const m = C.merge(a, b);
+  assert.equal(m.columns[0].id, 'a1'); // a's array won on the clock
+  assert.equal(m.tasks.find(t => t.id === 'x').columnId, 'a2'); // Doing → Doing by name
+  assert.equal(m.tasks.find(t => t.id === 'y').columnId, 'a1'); // unknown → first column
+});
+
+test('merge: a dangling projectId maps to the winning project of the same name', () => {
+  const a = board({ projects: [{ id: 'pa', name: 'API', color: '#fff' }], projectsMt: 100 });
+  const b = board({
+    projects: [{ id: 'pb', name: 'API', color: '#000' }], projectsMt: 50,
+    tasks: [task('t', { projectId: 'pb', mt: 60 })],
+  });
+  assert.equal(C.merge(a, b).tasks[0].projectId, 'pa');
+});
+
+test('merge: the event log only grows, and a rewritten day beats an unstamped copy', () => {
+  const e = { id: 'e1', taskId: 't', day: '2026-01-05', at: 1, to: 'X' };
+  const a = board({ events: [e, { id: 'e2', taskId: 't', day: '2026-01-06', at: 2, to: 'Y' }] });
+  const b = board({ events: [{ ...e, day: '2026-01-09', mt: 500 }] });
+  const m = C.merge(a, b);
+  assert.equal(m.events.length, 2);
+  assert.equal(m.events.find(x => x.id === 'e1').day, '2026-01-09');
+});
+
+test('merge: does not mutate its inputs', () => {
+  const a = board({ tasks: [task('t', { mt: 1 })] });
+  const b = board({ tasks: [task('t', { title: 'newer', mt: 2 })], tombstones: { z: 5 } });
+  const sa = JSON.stringify(a), sb = JSON.stringify(b);
+  C.merge(a, b);
+  assert.equal(JSON.stringify(a), sa);
+  assert.equal(JSON.stringify(b), sb);
+});
+
+test('migrate carries the sync fields through untouched', () => {
+  const raw = board({
+    tasks: [task('t', { mt: 42 })],
+    tombstones: { dead: 7 }, columnsMt: 9, projectsMt: 11,
+    events: [{ id: 'e', taskId: 't', day: '2026-01-05', at: 1, to: 'X', mt: 3 }],
+  });
+  const m = C.migrate(JSON.parse(JSON.stringify(raw)));
+  assert.equal(m.tasks[0].mt, 42);
+  assert.deepEqual(m.tombstones, { dead: 7 });
+  assert.equal(m.columnsMt, 9);
+  assert.equal(m.projectsMt, 11);
+  assert.equal(m.events[0].mt, 3);
+});
+
+/* ── sync: capability crypto ───────────────────────────── */
+
+test('deriveSync is deterministic and the token is not the secret', async () => {
+  const secret = C.randomSecret();
+  const d1 = await C.deriveSync(secret);
+  const d2 = await C.deriveSync(secret);
+  assert.equal(d1.token, d2.token);
+  assert.notEqual(d1.token, secret);
+  assert.equal(C.b64uToBytes(d1.token).length, 32);
+});
+
+test('seal → unseal round-trips a board, gzipped', async () => {
+  const { key } = await C.deriveSync(C.randomSecret());
+  const payload = C.syncable(board({ tasks: [task('t', { title: 'ñandú · 好' })] }));
+  const env = await C.seal(key, payload);
+  assert.equal(env.v, 1);
+  assert.equal(env.gz, 1); // node ≥18 and every target browser have CompressionStream
+  assert.deepEqual(await C.unseal(key, env), payload);
+});
+
+test('unseal rejects a tampered envelope and a wrong key', async () => {
+  const { key } = await C.deriveSync(C.randomSecret());
+  const env = await C.seal(key, { hello: 'world' });
+  const bent = { ...env, d: env.d.slice(0, -2) + (env.d.endsWith('AA') ? 'BB' : 'AA') };
+  await assert.rejects(() => C.unseal(key, bent));
+  const { key: other } = await C.deriveSync(C.randomSecret());
+  await assert.rejects(() => C.unseal(other, env));
+});
+
+test('base64url helpers round-trip binary including padding edge lengths', () => {
+  for (const n of [0, 1, 2, 3, 31, 32, 33, 100000]) {
+    const bytes = new Uint8Array(n).map((_, i) => (i * 37) % 256);
+    assert.deepEqual([...C.b64uToBytes(C.bytesToB64u(bytes))], [...bytes]);
+  }
+});
+
+/* ── sync: the conflicts that cost data ────────────────── */
+
+test('merge: a reorder on one device never clobbers a content edit on another', () => {
+  // The failure this prevents: addTask bumps every sibling's order, and "Sort
+  // by project" rewrites every order on the board. Under whole-row LWW that
+  // stamps a stale copy of every card, and a tidy on one device silently
+  // eats a title edited on another.
+  const a = board({ tasks: [task('t', { title: 'edited on the phone', mt: 5000, pmt: 1000 })] });
+  const b = board({ tasks: [task('t', { title: 't', mt: 1000, pmt: 9000, order: 7, columnId: 'c2' })] });
+  const m = C.merge(a, b);
+  assert.equal(m.tasks[0].title, 'edited on the phone'); // content from a
+  assert.equal(m.tasks[0].order, 7);                     // placement from b
+  assert.equal(m.tasks[0].columnId, 'c2');
+  assert.deepEqual(C.syncable(C.merge(b, a)).tasks, C.syncable(m).tasks); // either way round
+});
+
+test('merge: a reorder never resurrects a deliberately deleted card', () => {
+  // Only the content clock argues with a tombstone. A card deleted on the
+  // phone must not come back because the laptop happened to drag a neighbour.
+  const a = board({ tasks: [task('gone', { mt: 1000, pmt: 9000 })] }); // stale copy, freshly reordered
+  const b = board({ tombstones: { gone: 5000 } });
+  assert.equal(C.merge(a, b).tasks.length, 0);
+  assert.equal(C.merge(b, a).tasks.length, 0);
+});
+
+test('merge: concurrent stage additions both survive, and the done line holds', () => {
+  // Two devices each add a stage. Neither addition may be lost, and neither
+  // may land last — the last column IS the done stage, so an arriving stage
+  // must never redefine what the week's report counts as finished.
+  const base = [{ id: 'c1', name: 'Inbox' }, { id: 'c9', name: 'Done' }];
+  const a = board({ columns: [...base.slice(0, 1), { id: 'ca', name: 'Doing' }, base[1]], columnsMt: 200 });
+  const b = board({ columns: [...base.slice(0, 1), { id: 'cb', name: 'Review' }, base[1]], columnsMt: 100 });
+  const m = C.merge(a, b);
+  const names = m.columns.map(c => c.name);
+  assert.ok(names.includes('Doing') && names.includes('Review'), `both stages kept: ${names}`);
+  assert.equal(names[names.length - 1], 'Done', 'the done line did not move');
+  assert.deepEqual(C.merge(b, a).columns.map(c => c.name).sort(), names.slice().sort());
+});
+
+test('merge: a rename on one device and a reorder on the other both apply', () => {
+  const a = board({
+    columns: [{ id: 'c1', name: 'Backlog', mt: 500 }, { id: 'c2', name: 'Done' }],
+    columnsMt: 10,
+  });
+  const b = board({
+    columns: [{ id: 'c2', name: 'Done' }, { id: 'c1', name: 'Inbox' }],
+    columnsMt: 900, // b reordered later
+  });
+  const m = C.merge(a, b);
+  assert.deepEqual(m.columns.map(c => c.id), ['c2', 'c1']); // b's order
+  assert.equal(m.columns.find(c => c.id === 'c1').name, 'Backlog'); // a's rename
+});
+
+test('merge: concurrent project additions both survive', () => {
+  const a = board({ projects: [{ id: 'pa', name: 'API', color: '#fff', mt: 5 }], projectsMt: 200 });
+  const b = board({ projects: [{ id: 'pb', name: 'Website', color: '#000', mt: 5 }], projectsMt: 100 });
+  const names = C.merge(a, b).projects.map(p => p.name).sort();
+  assert.deepEqual(names, ['API', 'Website']);
+  assert.deepEqual(C.merge(b, a).projects.map(p => p.name).sort(), names);
+});
+
+test('merge is idempotent, commutative and associative over the synced subset', () => {
+  // Three replicas, because two-way convergence does not imply three-way.
+  const mk = (n, over) => board({
+    tasks: [task(`t${n}`, { mt: n * 10, pmt: n * 10 }), task('shared', { title: `from ${n}`, mt: n * 100, pmt: n })],
+    columns: [{ id: 'c1', name: 'Inbox' }, { id: `s${n}`, name: `Stage ${n}`, mt: n }, { id: 'c9', name: 'Done' }],
+    columnsMt: n * 7,
+    events: [{ id: `e${n}`, taskId: `t${n}`, day: '2026-01-0' + n, at: n, to: 'Inbox' }],
+    ...over,
+  });
+  const [x, y, z] = [mk(1), mk(2), mk(3)];
+  const S = st => C.canon(C.syncable(st));
+
+  assert.equal(S(C.merge(x, x)), S(x), 'idempotent');
+  assert.equal(S(C.merge(x, y)), S(C.merge(y, x)), 'commutative');
+
+  // Three replicas, both association orders. Everything that carries meaning
+  // converges; the one thing that does not is the middle ORDER of stages that
+  // were added concurrently, which depends on the order the merges happened
+  // in (see the note in core.js). So assert the invariants that matter.
+  const left = C.merge(C.merge(x, y), z);
+  const right = C.merge(x, C.merge(y, z));
+  for (const [name, pick] of [
+    ['tasks', st => C.canon(C.syncable(st).tasks)],
+    ['events', st => C.canon(C.syncable(st).events)],
+    ['tombstones', st => C.canon(C.syncable(st).tombstones)],
+    ['projects', st => C.canon(st.projects)],
+    ['the set of stages', st => C.canon(st.columns.map(c => c.id).slice().sort())],
+    ['the done stage', st => st.columns[st.columns.length - 1].id],
+  ]) {
+    assert.equal(pick(left), pick(right), `${name} converges whatever order replicas meet in`);
+  }
+
+  // and every replica's history survived the whole dance
+  assert.equal(left.events.length, 3);
+  assert.equal(left.tasks.length, 4); // t1, t2, t3, shared
+  assert.equal(left.tasks.find(t => t.id === 'shared').title, 'from 3'); // highest content clock
+});
+
+test('merge: the winner of a same-name stage collision keeps the tasks of both', () => {
+  // Two boards with independent histories both have an "Inbox" under
+  // different ids — pairing them must not strand either side's cards.
+  const a = board({
+    columns: [{ id: 'a1', name: 'Inbox' }], columnsMt: 100,
+    tasks: [task('ta', { columnId: 'a1', mt: 10 })],
+  });
+  const b = board({
+    columns: [{ id: 'b1', name: 'Inbox' }], columnsMt: 50,
+    tasks: [task('tb', { columnId: 'b1', mt: 10 })],
+  });
+  const m = C.merge(a, b);
+  assert.equal(m.columns.length, 1, 'one Inbox, not two');
+  assert.equal(m.tasks.length, 2);
+  assert.ok(m.tasks.every(t => t.columnId === m.columns[0].id), 'both sides landed in it');
+});
+
+test('clockMax sees every clock on the board', () => {
+  const st = board({
+    tasks: [task('t', { mt: 5, pmt: 900 })],
+    events: [{ id: 'e', taskId: 't', day: '2026-01-05', at: 1, to: 'X', mt: 40 }],
+    columns: [{ id: 'c1', name: 'X', mt: 70 }],
+    projects: [{ id: 'p', name: 'P', color: '#fff', mt: 80 }],
+    tombstones: { dead: 1200 },
+    columnsMt: 60,
+  });
+  assert.equal(C.clockMax(st), 1200);
+});
+
+test('canon is stable across key order, so tie-breaks agree on both devices', () => {
+  assert.equal(C.canon({ a: 1, b: [{ y: 2, x: 3 }] }), C.canon({ b: [{ x: 3, y: 2 }], a: 1 }));
+  assert.notEqual(C.canon({ a: 1 }), C.canon({ a: 2 }));
+});

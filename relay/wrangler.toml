@@ -1,0 +1,38 @@
+# kanban.page sync relay — deploy with `wrangler deploy` from this directory.
+# One SQLite-backed Durable Object per board; SQLite classes are what the
+# Workers free plan supports, and their 2 MB value cap fits a sealed board.
+name = "kanban-relay"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+[[durable_objects.bindings]]
+name = "BOARD"
+class_name = "Board"
+
+# One object counts every board created here — see allowCreate in worker.js.
+[[durable_objects.bindings]]
+name = "GATE"
+class_name = "Gate"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Board"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Gate"]
+
+# Creating a board is the only unauthenticated act this relay allows: every
+# random token addresses its own empty slot, so without a budget one script
+# can allocate storage until the account's free tier is gone. Reading and
+# writing an EXISTING board is not limited — that traffic is already gated by
+# a secret nobody can guess.
+[[ratelimits]]
+name = "NEW_BOARD"
+namespace_id = "1001"
+simple = { limit = 12, period = 60 }
+
+[[ratelimits]]
+name = "WATCH"
+namespace_id = "1002"
+simple = { limit = 60, period = 60 }
