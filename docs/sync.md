@@ -85,7 +85,16 @@ Pure, in `core.js`, unit-tested. Never mutates its inputs.
   report is defined by it. A stage the winning order never saw is inserted
   *before* its last entry, so an arriving stage can never redefine what the
   week calls finished. Boards with independent histories that both have an
-  "Inbox" are deduplicated by name, and tasks follow to the survivor.
+  "Inbox" are deduplicated by name, and tasks follow to the survivor — but
+  only for a genuine coincidence: one id that *only* this side knows meeting
+  one that *only* the other side does. A name either side already shares, or
+  two candidates on one side, is ambiguous and keeps every stage. Nothing
+  stops one board from having two stages called "Done", and collapsing those
+  would swallow one; a duplicate is one click to delete.
+
+  **An empty list is not an opinion about order**, so it can never win one —
+  a caller that hands merge a board with `columns: []` must not get the real
+  board's stages sorted by id.
 - **The event log only grows.** Union by id; a same-id collision can only be a
   `rewriteDay`, resolved by stamp. Even when a row's content loses, the loser's
   events still land. The log is the only copy of the history, and no merge, no
@@ -147,9 +156,20 @@ GET    /v1/board/watch  → WebSocket; every accepted write broadcasts { ver }
 - **Pull** on load, on focus, on becoming visible, on the watch socket's
   signal, and on the 30s fallback.
 - **The floor.** Events and tombstones known to have reached the relay are
-  unioned into every push. This is what stops a snapshot write from shrinking
-  the server's history — an imported backup or an undo can never truncate the
-  log for every other device. While sync is on, Import *merges*.
+  unioned into every push (`unionFloor`). This is what stops a snapshot write
+  from shrinking the server's history — an imported backup or an undo can
+  never truncate the log for every other device. While sync is on, Import
+  *merges*. The floor is emphatically **not** a board: it carries no stages,
+  projects or cards, so it is unioned directly and never put through `merge`,
+  which reads whole-board meaning into whatever it is handed.
+- **Joining is not the same as syncing.** When a pairing link is adopted, the
+  board being *joined* keeps its stage and project order regardless of clocks
+  (`preferOrder: 'remote'`, held until that adoption's first push lands, so a
+  409 retry keeps it too). Scanning a link means joining an existing board,
+  not bringing your layout to it — and since the last column is the done
+  stage, the alternative lets a phone's default stages redefine what the
+  joined board calls finished. Stages the joined board does not know still
+  arrive before its last column.
 - **One interaction barrier.** A remote change is fetched immediately but
   applied only when the screen is safe: never during a card, stage or project
   drag, an open composer, an open editor, an inline stage rename, or a report

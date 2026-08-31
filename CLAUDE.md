@@ -69,6 +69,10 @@ The modal shows the route (`from → to`) precisely because the export does not:
 
 **Stage order is atomic; stage identity is not.** Items merge per id (two devices adding a stage keep both); the order is one vector under `columnsMt`. A stage the winning vector never saw is inserted *before* its last entry, because the last column is the done stage and an arriving stage must never redefine what the report calls finished. Merge is commutative and idempotent but not associative for that middle order — a documented, self-healing trade, see `docs/sync.md`.
 
+**`merge` is for two boards, and only two boards.** It reads whole-board meaning into both arguments — an empty `columns: []` used to win the order vector and sort the real stages by id, moving the done line. So the push floor is unioned directly (`unionFloor`), never merged, and an empty list can no longer win an order. For the same reason the name dedupe only collapses a genuine cross-board coincidence: one id known *only* to each side. Two stages named "Done" on one board are legal and must both survive.
+
+**Joining a board is not the same as syncing with it.** Adopting a pairing link passes `preferOrder: 'remote'` so the joined board keeps its stage order and therefore its done stage; the flag is held until that adoption's first push lands so a 409 retry keeps it too.
+
 **Every apply is a merge, never a replace, and never mid-interaction.** That holds for remote pulls *and* for the cross-tab `storage` event (this tab may hold edits still inside its save debounce). `syncBusy()` is the barrier: drags, composer, open editor, inline stage rename, report date edit — each settles by calling `flushExternal()`. The editor is the sharp one: its `draft` is a clone from open time, so applying underneath it lets the following save clobber the remote edit. And the `floor` — events and tombstones known to be on the relay — is unioned into every push, so no snapshot write (an import, an undo) can shrink the server's log. While sync is on, Import merges.
 
 ### Rendering model and its one big gotcha

@@ -988,3 +988,209 @@ test('canon is stable across key order, so tie-breaks agree on both devices', ()
   assert.equal(C.canon({ a: 1, b: [{ y: 2, x: 3 }] }), C.canon({ b: [{ x: 3, y: 2 }], a: 1 }));
   assert.notEqual(C.canon({ a: 1 }), C.canon({ a: 2 }));
 });
+
+/* ── sync: the three regressions ───────────────────────── */
+
+test('merge keeps two stages that share a name on ONE board', () => {
+  // The name dedupe exists for two independent boards that both have an
+  // "Inbox". It must never touch two stages that legitimately coexist here —
+  // it used to, on every merge including a routine pull, and one of them
+  // vanished with its cards rehomed to the other.
+  const b = board({
+    columns: [{ id: 'c1', name: 'Inbox' }, { id: 'c2', name: 'Done' }, { id: 'c3', name: 'Done' }],
+    columnsMt: 100,
+    tasks: [task('a', { columnId: 'c2', mt: 1 }), task('b', { columnId: 'c3', mt: 1 })],
+  });
+  const m = C.merge(b, b);
+  assert.deepEqual(m.columns.map(c => c.id), ['c1', 'c2', 'c3'], 'every stage survived');
+  assert.equal(m.tasks.find(t => t.id === 'a').columnId, 'c2', 'cards did not move');
+  assert.equal(m.tasks.find(t => t.id === 'b').columnId, 'c3');
+});
+
+test('merge still collapses one genuine cross-board name coincidence', () => {
+  // Two boards with separate histories, each with its own "Inbox": still one
+  // Inbox afterwards, and both sides' cards land in it.
+  const a = board({
+    columns: [{ id: 'a1', name: 'Inbox' }], columnsMt: 100,
+    tasks: [task('ta', { columnId: 'a1', mt: 10 })],
+  });
+  const b = board({
+    columns: [{ id: 'b1', name: 'Inbox' }], columnsMt: 50,
+    tasks: [task('tb', { columnId: 'b1', mt: 10 })],
+  });
+  const m = C.merge(a, b);
+  assert.equal(m.columns.length, 1);
+  assert.equal(m.tasks.length, 2);
+  assert.ok(m.tasks.every(t => t.columnId === m.columns[0].id));
+});
+
+test('merge leaves an ambiguous name collision alone rather than guessing', () => {
+  // One side has two "Done", the other has one. Nothing here is a clean
+  // pairing coincidence, so every stage is kept: a duplicate is one click to
+  // delete, a swallowed stage is gone.
+  const a = board({
+    columns: [{ id: 'a1', name: 'Done' }, { id: 'a2', name: 'Done' }], columnsMt: 100,
+  });
+  const b = board({ columns: [{ id: 'b1', name: 'Done' }], columnsMt: 50 });
+  assert.equal(C.merge(a, b).columns.length, 3);
+  assert.equal(C.merge(b, a).columns.length, 3);
+});
+
+test('adoption lets the board being JOINED keep its done stage', () => {
+  // A phone with the default stages scans a desktop whose done stage is
+  // "Shipped". Without preferOrder the phone's clock could win and "Done"
+  // would land last, silently redefining what the weekly report counts.
+  const desktop = board({
+    columns: [
+      { id: 'd1', name: 'Inbox' }, { id: 'd2', name: 'Doing' },
+      { id: 'd3', name: 'Review' }, { id: 'd4', name: 'Shipped' },
+    ],
+    columnsMt: 10, // deliberately LOWER than the phone's
+    tasks: [task('desk', { columnId: 'd4', mt: 10 })],
+  });
+  const phone = board({
+    columns: [
+      { id: 'p1', name: 'Inbox' }, { id: 'p2', name: 'Doing' },
+      { id: 'p3', name: 'Waiting' }, { id: 'p4', name: 'Done' },
+    ],
+    columnsMt: 9000,
+    tasks: [task('mine', { columnId: 'p1', mt: 10 })],
+  });
+  const joined = C.merge(phone, desktop, { preferOrder: 'remote' });
+  const names = joined.columns.map(c => c.name);
+  assert.equal(names[names.length - 1], 'Shipped', `done stage held (${names})`);
+  assert.ok(names.includes('Waiting') && names.includes('Done'), 'the phone lost no stage');
+  assert.equal(joined.tasks.length, 2, 'and no card');
+  // both boards' cards resolve to a stage that exists
+  const ids = new Set(joined.columns.map(c => c.id));
+  assert.ok(joined.tasks.every(t => ids.has(t.columnId)));
+
+  // with equal clocks — every board from before the sync release — too
+  const flat = C.merge({ ...phone, columnsMt: 0 }, { ...desktop, columnsMt: 0 }, { preferOrder: 'remote' });
+  assert.equal(flat.columns[flat.columns.length - 1].name, 'Shipped');
+});
+
+test('the floor union leaves stages, order and the done stage untouched', () => {
+  // push() folds the relay's known events and tombstones back in so a
+  // snapshot cannot shrink the server's log. It used to do that through
+  // merge() with an otherwise-empty board, and on any board whose stage clock
+  // was still 0 — every board created before the sync release — the empty
+  // side won the order vector and the stages came back sorted by id.
+  const st = board({
+    columns: [{ id: 'z1', name: 'Inbox' }, { id: 'm2', name: 'Doing' },
+      { id: 'a3', name: 'Review' }, { id: 'b4', name: 'Shipped' }],
+    tasks: [task('t1', { columnId: 'b4', mt: 5 })],
+    events: [{ id: 'local', taskId: 't1', day: '2026-08-30', at: 2, to: 'Shipped' }],
+  });
+  delete st.columnsMt;
+  delete st.projectsMt;
+  const out = C.unionFloor(st, {
+    events: [{ id: 'fromServer', taskId: 't0', day: '2026-08-01', at: 1, to: 'Inbox' }],
+    tombstones: { longGone: 4 },
+  });
+  assert.deepEqual(out.columns.map(c => c.name), ['Inbox', 'Doing', 'Review', 'Shipped']);
+  assert.equal(out.columns[out.columns.length - 1].name, 'Shipped', 'done stage held');
+  assert.equal(out.tasks[0].columnId, 'b4', 'cards stayed put');
+  assert.equal(out.events.length, 2, 'the log grew by the server event');
+  assert.equal(out.tombstones.longGone, 4, 'and carries the server tombstone');
+});
+
+test('the floor union still applies a server tombstone, unless we edited since', () => {
+  const st = board({ tasks: [task('doomed', { mt: 100 }), task('saved', { mt: 900 })] });
+  const out = C.unionFloor(st, { events: [], tombstones: { doomed: 500, saved: 500 } });
+  assert.deepEqual(out.tasks.map(t => t.id), ['saved'], 'older than the tombstone goes');
+});
+
+test('an empty column list can never win the order vector', () => {
+  const real = board({ columns: cols(['Inbox', 'Doing', 'Done']), columnsMt: 0 });
+  const empty = { columns: [], columnsMt: 0, projects: [], projectsMt: 0, tasks: [], tombstones: {}, events: [] };
+  for (const [x, y] of [[real, empty], [empty, real]]) {
+    const m = C.merge(x, y);
+    assert.deepEqual(m.columns.map(c => c.name), ['Inbox', 'Doing', 'Done']);
+  }
+});
+
+test("an adoption's order decision outranks a second tab on the joining device", () => {
+  // The phone adopts in one tab. Another tab on the phone still holds the
+  // pre-adoption board at the SAME stage clock. Without the adoption decision
+  // outranking both inputs, that tab ties on the clock, wins the lexical
+  // tie-break, and pushes the phone's order back — undoing the fix.
+  const desktop = board({
+    columns: [{ id: 'd1', name: 'Inbox' }, { id: 'd4', name: 'Shipped' }],
+    columnsMt: 9000,
+  });
+  const phone = board({
+    columns: [{ id: 'p1', name: 'Inbox' }, { id: 'p4', name: 'Done' }],
+    columnsMt: 9000, // same clock as the desktop
+  });
+  const union = C.merge(phone, desktop, { preferOrder: 'remote' });
+  assert.equal(union.columns[union.columns.length - 1].name, 'Shipped');
+  assert.ok(union.columnsMt > 9000, 'the decision outranks both inputs');
+
+  // the stale tab folds the union in as ordinary sync and must yield
+  const inStaleTab = C.merge(phone, C.syncable(union));
+  assert.equal(inStaleTab.columns[inStaleTab.columns.length - 1].name, 'Shipped');
+  // and the desktop is unmoved
+  const onDesktop = C.merge(desktop, C.syncable(union));
+  assert.equal(onDesktop.columns[onDesktop.columns.length - 1].name, 'Shipped');
+});
+
+test('a forced order that changes nothing does not inflate the clock', () => {
+  const b = board({ columns: cols(['Inbox', 'Done']), columnsMt: 500 });
+  const m = C.merge(b, b, { preferOrder: 'remote' });
+  assert.equal(m.columnsMt, 500, 'identical orders leave the clock alone');
+  assert.equal(C.canon(C.syncable(m)), C.canon(C.syncable(C.merge(m, m))), 'still idempotent');
+});
+
+test('not even a forced preference lets an empty list win the order', () => {
+  // Found in review: the `forced` branch used to short-circuit the
+  // empty-list guard, so an explicit preference for an empty side won an
+  // order it had no information about.
+  const real = board({ columns: cols(['Inbox', 'Doing', 'Done']), columnsMt: 1 });
+  const empty = { columns: [], columnsMt: 10, projects: [], projectsMt: 0, tasks: [], tombstones: {}, events: [] };
+  assert.deepEqual(
+    C.merge(empty, real, { preferOrder: 'local' }).columns.map(c => c.name),
+    ['Inbox', 'Doing', 'Done'],
+  );
+  assert.deepEqual(
+    C.merge(real, empty, { preferOrder: 'remote' }).columns.map(c => c.name),
+    ['Inbox', 'Doing', 'Done'],
+  );
+});
+
+test('stages the winning order never saw keep their own arrangement', () => {
+  // Found in review: leftovers were sorted by id, so when the winning vector
+  // contributed nothing — all of its stages deleted — the survivors came back
+  // in id order, the same scrambling the floor-union defect was about.
+  const a = board({
+    columns: [{ id: 'zz', name: 'Only', mt: 1 }], columnsMt: 900,
+    tombstones: { zz: 5000 },
+  });
+  const b = board({
+    // deliberately NOT in id order, so id-sorting would be visible
+    columns: [{ id: 'm', name: 'First' }, { id: 'a', name: 'Second' }, { id: 'z', name: 'Third' }],
+    columnsMt: 1,
+  });
+  assert.deepEqual(C.merge(a, b).columns.map(c => c.name), ['First', 'Second', 'Third']);
+  assert.deepEqual(C.merge(b, a).columns.map(c => c.name), ['First', 'Second', 'Third']);
+});
+
+test("a task in a deleted stage lands somewhere real, never nowhere", () => {
+  // mergeLists drops a tombstoned stage without an alias; the rehoming pass
+  // after it is what keeps the card reachable — by name where possible.
+  const withName = board({
+    columns: [{ id: 'old', name: 'Doing', mt: 1 }, { id: 'keep', name: 'Doing', mt: 9 }],
+    columnsMt: 5, tombstones: { old: 100 },
+    tasks: [task('t', { columnId: 'old', mt: 200 })],
+  });
+  const m = C.merge(withName, withName);
+  assert.ok(m.columns.some(c => c.id === m.tasks[0].columnId), 'the card sits in a real stage');
+
+  const noName = board({
+    columns: [{ id: 'old', name: 'Doing', mt: 1 }, { id: 'other', name: 'Inbox', mt: 1 }],
+    columnsMt: 5, tombstones: { old: 100 },
+    tasks: [task('t', { columnId: 'old', mt: 200 })],
+  });
+  const n = C.merge(noName, noName);
+  assert.equal(n.tasks[0].columnId, n.columns[0].id, "migrate's rule: the first stage");
+});

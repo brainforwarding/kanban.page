@@ -449,7 +449,7 @@ const BoardCore = (() => {
       // the order VECTOR has its own clock: reorders, adds and deletes move
       // it; a rename alone does not, so a rename can never drag the done
       // line of a concurrent reorder along with it
-      const ids = l => (l || []).map(c => c.id).join(' ');
+      const ids = l => (l || []).map(c => c.id).join('\\0');
       if (ids(oldList) !== ids(list)) { next[key] = clock; stamped = true; }
     }
 
@@ -482,7 +482,7 @@ const BoardCore = (() => {
   });
 
   /**
-   * merge(local, remote) → a fresh board. Local preferences pass through
+   * merge(local, remote[, opts]) → a fresh board. Local preferences pass through
    * untouched; the synced subset merges by the rules in docs/sync-spec.md:
    *
    * - columns/projects: per-item union (id, then name-deduped for boards
@@ -508,9 +508,20 @@ const BoardCore = (() => {
    *   a mere reorder never resurrects anything.
    * - events: union by id — the log only ever grows.
    */
-  function merge(local, remote) {
+  function merge(local, remote, opts = {}) {
     const deep = x => JSON.parse(JSON.stringify(x));
     const a = local || {}, b = remote || {};
+    // Adoption forces the side whose order wins: scanning a pairing link
+    // means joining an existing board, not bringing your stage layout to it.
+    // Clocks are untouched, so ordinary sync keeps resolving them normally.
+    //
+    // This makes merge DELIBERATELY ASYMMETRIC while set: `preferOrder:
+    // 'remote'` names the second argument, so swapping the arguments swaps
+    // which order wins. Only the plain two-argument call is commutative, and
+    // that is the only form ongoing sync uses — the option is passed at
+    // exactly one call site, always as merge(local, remote, …).
+    const forced = opts.preferOrder === 'remote' ? 'b'
+      : opts.preferOrder === 'local' ? 'a' : null;
 
     const tombstones = {};
     for (const side of [a.tombstones, b.tombstones]) {
@@ -525,9 +536,23 @@ const BoardCore = (() => {
     function mergeLists(aList, bList, aMt, bMt, insertBeforeLast) {
       const aIds = (aList || []).map(c => c.id);
       const bIds = (bList || []).map(c => c.id);
-      const orderWinsA = aMt !== bMt ? aMt > bMt : canon(aIds) >= canon(bIds);
+      // An empty list is not an opinion about order, so it can never win one:
+      // without this, a caller handing merge a board with `columns: []` sorts
+      // the real board's stages by id and moves its done line.
+      // Emptiness is checked BEFORE `forced`: an empty list carries no
+      // ordering information, so not even an explicit preference can make it
+      // win one.
+      const orderWinsA = !aIds.length !== !bIds.length ? !bIds.length
+        : forced ? forced === 'a'
+        : aMt !== bMt ? aMt > bMt
+        : canon(aIds) >= canon(bIds);
       const winnerIds = orderWinsA ? aIds : bIds;
-      const orderMt = Math.max(aMt, bMt);
+      // A forced (adoption) decision outranks both inputs, so a second tab on
+      // the joining device — still holding the pre-adoption order at the same
+      // clock — cannot tie and win it back. Only when the two orders actually
+      // differ, so merging a board with itself stays idempotent.
+      const decided = forced && canon(aIds) !== canon(bIds);
+      const orderMt = Math.max(aMt, bMt) + (decided ? 1 : 0);
 
       // union by id: higher item clock wins content, tombstones delete
       const byId = new Map();
@@ -543,28 +568,56 @@ const BoardCore = (() => {
 
       // Two boards with separate histories both have an "Inbox" under
       // different ids: keep one, remember the alias so tasks follow it.
+      //
+      // Only a genuine cross-board coincidence collapses — one id that ONLY
+      // this side knows meeting one id that ONLY the other side does. Nothing
+      // stops a single board from having two stages named the same, and an
+      // earlier version of this collapsed those too: every merge, including a
+      // routine pull, silently swallowed one of them. Deliberately
+      // conservative, because the costs are not symmetric — a duplicate stage
+      // is one click to delete, a swallowed stage is gone.
       const inWinner = new Set(winnerIds);
+      const aHas = new Set(aIds), bHas = new Set(bIds);
       const byName = new Map();
-      const alias = new Map();
       for (const c of items) {
-        const held = byName.get(c.name);
-        if (!held) { byName.set(c.name, c); continue; }
-        const keep =
-          inWinner.has(held.id) !== inWinner.has(c.id) ? (inWinner.has(held.id) ? held : c)
-            : (held.mt || 0) !== (c.mt || 0) ? ((held.mt || 0) > (c.mt || 0) ? held : c)
-            : canon(held) >= canon(c) ? held : c;
-        const drop = keep === held ? c : held;
-        byName.set(c.name, keep);
-        alias.set(drop.id, keep.id);
+        if (!byName.has(c.name)) byName.set(c.name, []);
+        byName.get(c.name).push(c);
       }
-      items = [...byName.values()];
+      const alias = new Map();
+      const dropped = new Set();
+      for (const group of byName.values()) {
+        if (group.length < 2) continue;
+        const aOnly = group.filter(c => aHas.has(c.id) && !bHas.has(c.id));
+        const bOnly = group.filter(c => bHas.has(c.id) && !aHas.has(c.id));
+        const shared = group.filter(c => aHas.has(c.id) && bHas.has(c.id));
+        // a name either side already shares, or more than one candidate on a
+        // side, is ambiguous — keep every stage and let the user decide
+        if (shared.length || aOnly.length !== 1 || bOnly.length !== 1) continue;
+        const [x] = aOnly, [y] = bOnly;
+        const keep =
+          inWinner.has(x.id) !== inWinner.has(y.id) ? (inWinner.has(x.id) ? x : y)
+            : (x.mt || 0) !== (y.mt || 0) ? ((x.mt || 0) > (y.mt || 0) ? x : y)
+            : canon(x) >= canon(y) ? x : y;
+        const drop = keep === x ? y : x;
+        alias.set(drop.id, keep.id);
+        dropped.add(drop.id);
+      }
+      items = items.filter(c => !dropped.has(c.id));
 
       // the winning vector first (survivors only), then what it never saw —
       // before its last entry for columns, so the done line cannot move
       const itemById = new Map(items.map(c => [c.id, c]));
       const ordered = winnerIds.filter(id => itemById.has(id)).map(id => itemById.get(id));
+      // Stages the winner never saw keep the arrangement they had on the side
+      // they came from; anything neither vector lists falls back to id order.
+      // Both rules are argument-order independent, so this stays commutative.
+      const loserIds = orderWinsA ? bIds : aIds;
+      const rank = id => {
+        const i = loserIds.indexOf(id);
+        return i === -1 ? loserIds.length : i;
+      };
       const leftovers = items.filter(c => !winnerIds.includes(c.id))
-        .sort((x, y) => x.id < y.id ? -1 : 1); // argument-order independent
+        .sort((x, y) => rank(x.id) - rank(y.id) || (x.id < y.id ? -1 : 1));
       if (insertBeforeLast && ordered.length) ordered.splice(ordered.length - 1, 0, ...leftovers);
       else ordered.push(...leftovers);
 
@@ -643,6 +696,41 @@ const BoardCore = (() => {
     };
     delete out.seed; // a merged board is never a replaceable first-run seed
     return out;
+  }
+
+  /**
+   * Union the relay's known events and tombstones back into a board, and
+   * nothing else. The floor is what stops a snapshot write — an imported
+   * backup, an undo — from shrinking the server's history, and it is
+   * emphatically NOT a board: it carries no stages, projects or cards.
+   * Putting it through merge() meant handing whole-board semantics a mostly
+   * empty board, which sorted the real stages by id and moved the done line.
+   */
+  function unionFloor(st, floor) {
+    const events = new Map();
+    for (const e of st.events || []) events.set(e.id, e);
+    for (const e of (floor && floor.events) || []) {
+      const held = events.get(e.id);
+      // same rule as merge: a rewritten day wins, ties break canonically
+      if (!held) { events.set(e.id, e); continue; }
+      const em = e.mt || 0, hm = held.mt || 0;
+      if (em > hm || (em === hm && canon(e) > canon(held))) events.set(e.id, e);
+    }
+
+    const tombstones = { ...(st.tombstones || {}) };
+    for (const [id, ts] of Object.entries((floor && floor.tombstones) || {})) {
+      tombstones[id] = Math.max(tombstones[id] || 0, ts);
+    }
+
+    return {
+      ...st,
+      // a tombstone the server holds still deletes, unless this device has
+      // touched the card since — the same contest merge() runs
+      tasks: (st.tasks || []).filter(t => !(tombstones[t.id] != null && mtOf(t) <= tombstones[t.id])),
+      tombstones: Object.fromEntries(Object.entries(tombstones).sort(([x], [y]) => x < y ? -1 : 1)),
+      events: [...events.values()]
+        .sort((x, y) => (x.at || 0) - (y.at || 0) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)),
+    };
   }
 
   /* ── sync: capability crypto ──────────────────────────────
@@ -806,7 +894,7 @@ const BoardCore = (() => {
     weeksWithActivity, aggregateWeek, groupByProject, summaryLine, toMarkdown, reportFilename,
     shouldLogMove, isDay, makeEvent, rewriteConflict, rewriteDay,
     reindex, applyOrder, sortByProject, defaultBoard, migrate,
-    mtOf, pmtOf, clockMax, canon, stampChanges, syncable, merge,
+    mtOf, pmtOf, clockMax, canon, stampChanges, syncable, merge, unionFloor,
     randomSecret, deriveSync, seal, unseal, bytesToB64u, b64uToBytes,
   };
 })();

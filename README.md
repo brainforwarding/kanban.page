@@ -93,7 +93,7 @@ deleted once it's empty.
 ## Develop
 
 ```bash
-node --test tests/core.test.js     # 93 unit tests, no dependencies
+node --test tests/core.test.js     # 105 unit tests, no dependencies
 ```
 
 They cover what is easy to get silently wrong: calendar dates across DST,

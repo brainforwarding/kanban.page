@@ -242,6 +242,10 @@ let remoteHead = '';    // serialized syncable known to equal the server head
 // the log or drop a tombstone from the server (the log only grows).
 let floor = null;
 let pendingRemote = null;
+// True from the moment a pairing link is adopted until that adoption's first
+// push lands: scanning a link means joining someone's board, so their stage
+// order wins rather than whichever clock happens to be higher.
+let joiningOrder = false;
 let pushTimer = null, pushing = false, pullQueued = false, pulling = false;
 let watchSock = null, watchRetry = 0;
 let uiDragLock = 0;     // column and project-row drags hold this
@@ -304,7 +308,9 @@ function applyRemote(remote, ver) {
   saveSyncConfig();
   C.stampChanges(lastStamped, state); // pending local edits keep their clocks
   const before = syncableStr(state);
-  const merged = C.merge(state, remote);
+  // While joining a board, its stage order wins — including through a 409
+  // retry, which lands back here before the adoption has settled.
+  const merged = C.merge(state, remote, joiningOrder ? { preferOrder: 'remote' } : {});
   remoteHead = normalized(remote);
   state = merged;
   lastStamped = clone(state);
@@ -335,13 +341,17 @@ async function push(opts = {}) {
   C.stampChanges(lastStamped, state);
   lastStamped = clone(state);
   if (floor) {
-    state = C.merge(state, {
-      columns: [], columnsMt: 0, projects: [], projectsMt: 0, tasks: [],
-      tombstones: floor.tombstones, events: floor.events,
-    });
+    // events and tombstones only — see unionFloor. This used to go through
+    // merge() with an otherwise-empty board, which sorted the real stages by
+    // id and moved the done line on any board whose stage clock was still 0.
+    state = C.unionFloor(state, floor);
     lastStamped = clone(state);
   }
-  if (syncableStr(state) === remoteHead) { setSyncStatus('ok'); return; }
+  if (syncableStr(state) === remoteHead) {
+    joiningOrder = false; // nothing to send: the adoption has settled too
+    setSyncStatus('ok');
+    return;
+  }
   pushing = true;
   setSyncStatus('syncing');
   try {
@@ -356,6 +366,7 @@ async function push(opts = {}) {
         saveSyncConfig();
         remoteHead = snap;
         floor = { events: payload.events, tombstones: payload.tombstones };
+        joiningOrder = false; // the adoption has settled
         setSyncStatus('ok');
         syncedAt = Date.now();
         if (syncableStr(state) !== snap) schedulePush(300); // edits landed mid-flight
@@ -500,6 +511,7 @@ async function enableSync() {
 function syncStopped(msg) {
   dropWatch();
   clearTimeout(pushTimer);
+  joiningOrder = false;
   sync = null;
   syncKeys = null;
   remoteHead = '';
@@ -519,6 +531,7 @@ let saidSyncLost = false;
 function syncLost() {
   dropWatch();
   clearTimeout(pushTimer);
+  joiningOrder = false;
   sync = null;
   syncKeys = null;
   remoteHead = '';
@@ -559,6 +572,8 @@ async function adoptFromLink(secret) {
   pendingSecret = secret;
   const pristine = state.seed === true;
   const before = clone(state);
+  // A pristine board is replaced outright, so there is no order to contest.
+  joiningOrder = !pristine;
   syncView = 'adopting';
   if ($('#sync').hidden) openSync('adopting'); else renderSync();
 
@@ -614,6 +629,7 @@ async function adoptFromLink(secret) {
   } catch (err) {
     sync = null;
     syncKeys = null;
+    joiningOrder = false;
     saveSyncConfig();
     syncFailMsg = err && err.gone ? 'gone' : 'offline';
     syncView = 'failed';
