@@ -42,6 +42,25 @@ const NS = new URLSearchParams(location.search).get('ns');
 const KEY = NS ? `board.v2.${NS}` : 'board.v2';
 const LEGACY_KEY = NS ? null : 'board.v1';
 
+// Device-local generations never travel through syncable(). Content answers
+// "merge or replace this tab's board?"; binding answers "which sync engine may
+// run?" They are separate so Combine preserves another tab's pending draft
+// while still shutting the old remote down immediately.
+const ZERO_GEN = Object.freeze({ at: 0, id: '' });
+const localGen = (st, key) => {
+  const g = st && st[key];
+  return g && Number.isFinite(g.at) && typeof g.id === 'string' ? g : ZERO_GEN;
+};
+const compareGen = (a, b) => (a.at || 0) - (b.at || 0) || String(a.id || '').localeCompare(String(b.id || ''));
+const sameGen = (a, b) => compareGen(a, b) === 0;
+const maxGen = (a, b) => compareGen(a, b) >= 0 ? a : b;
+const nextGen = (...held) => ({
+  at: Math.max(Date.now(), ...held.map(g => (g && g.at || 0) + 1)),
+  id: C.uid(),
+});
+const contentGenOf = st => localGen(st, '_contentGen');
+const bindingGenOf = st => localGen(st, '_bindingGen');
+
 /** First ever run: one card, so the session line is discoverable. `seed`
     marks the board replaceable when a sync link adopts it — stampChanges
     clears it on the first real change, so content is never inferred. */
@@ -107,7 +126,6 @@ function applyLocale() {
   $('#archive').setAttribute('aria-label', tr('archive')); $('#archive h2').textContent = tr('archive');
   $('#arch-empty').textContent = tr('deleteAll');
   const menuText = { projects: tr('projects'), archive: tr('archive'), theme: tr('theme'), addcol: tr('addStage'), sortproj: tr('sortProject'), export: tr('export'), import: tr('import'), sync: tr('syncDevices') };
-  $('#sync').setAttribute('aria-label', tr('sync'));
   $('#syncTitle').textContent = tr('sync');
   $('[data-close]', $('#sync')).title = tr('close');
   $('#sync-copy').title = tr('copy');
@@ -147,16 +165,49 @@ let saveTimer = null;
 // without a single touch() call anywhere else.
 let lastStamped = clone(state);
 
+function writeStateNow() {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(state));
+    return true;
+  } catch (err) {
+    console.warn('board: could not write storage —', err);
+    toast(tr('storageUnavailable'), null, 8000);
+    return false;
+  }
+}
+
+function installLocalState(next) {
+  const migrated = C.migrate(next);
+  try {
+    localStorage.setItem(KEY, JSON.stringify(migrated));
+  } catch (err) {
+    console.warn('board: could not write storage —', err);
+    toast(tr('storageUnavailable'), null, 8000);
+    return false;
+  }
+  state = migrated;
+  lastStamped = clone(state);
+  return true;
+}
+
+function linkedReplacement(remote) {
+  const prefs = {
+    theme: state.theme,
+    density: state.density,
+    flagFilter: !!state.flagFilter,
+    filter: state.filter,
+  };
+  const next = C.migrate({ ...state, ...clone(remote), ...prefs });
+  if (next.filter && !(next.projects || []).some(p => p.id === next.filter)) next.filter = null;
+  delete next.seed;
+  return next;
+}
+
 function flushSave() {
   clearTimeout(saveTimer);
   C.stampChanges(lastStamped, state);
   lastStamped = clone(state);
-  try {
-    localStorage.setItem(KEY, JSON.stringify(state));
-  } catch (err) {
-    console.warn('board: could not write storage —', err);
-    toast('Storage is unavailable — export a backup', null, 8000);
-  }
+  writeStateNow();
   if (sync) schedulePush();
 }
 
@@ -185,39 +236,85 @@ function flushPendingSave() {
 
 let pendingExternal = null;
 
+function queueExternal(external) {
+  if (!pendingExternal) {
+    pendingExternal = clone(external);
+    return;
+  }
+  const heldContent = contentGenOf(pendingExternal);
+  const heldBinding = bindingGenOf(pendingExternal);
+  const nextContent = contentGenOf(external);
+  const nextBinding = bindingGenOf(external);
+  const cmp = compareGen(nextContent, heldContent);
+  if (cmp > 0) pendingExternal = clone(external);
+  else if (cmp === 0) pendingExternal = C.merge(pendingExternal, external);
+  pendingExternal._contentGen = clone(maxGen(heldContent, nextContent));
+  pendingExternal._bindingGen = clone(maxGen(heldBinding, nextBinding));
+}
+
 function applyExternal(rawJson) {
-  if (syncBusy()) { pendingExternal = rawJson; return; }
   let raw = null;
   try { raw = JSON.parse(rawJson); } catch (err) { return; }
   if (!raw) return;
   const external = C.migrate(raw);
-  C.stampChanges(lastStamped, state, undefined, external.tombstones); // settle drafts past a fetched delete
-  state = C.merge(state, external);
+  const contentCmp = compareGen(contentGenOf(external), contentGenOf(state));
+  const bindingCmp = compareGen(bindingGenOf(external), bindingGenOf(state));
+
+  // Relationship transitions stop the old wire immediately, even if an open
+  // editor makes the visual replacement wait. Otherwise that editor could
+  // settle Y's board and an old tab would still upload it to X.
+  if (bindingCmp > 0) {
+    syncBindingSuspended = true;
+    suspendSyncRuntime();
+  }
+  if (syncBusy()) { queueExternal(external); return; }
+
+  if (contentCmp <= 0) {
+    C.stampChanges(lastStamped, state, undefined, external.tombstones);
+  }
+  if (contentCmp > 0) {
+    state = linkedReplacement(external);
+  } else if (contentCmp === 0) {
+    state = C.merge(state, external);
+  } // lower content generation is a stale pre-replacement write: ignore it
+
+  state._contentGen = clone(maxGen(contentGenOf(state), contentGenOf(external)));
+  state._bindingGen = clone(maxGen(bindingGenOf(state), bindingGenOf(external)));
   lastStamped = clone(state);
   render();
   if (!panel.hidden) renderProjects();
   if (!archiveEl.hidden) renderArchive();
   if (!reportEl.hidden) renderReport(false);
-  // If this tab knew something the writer did not, put the union back into
-  // storage; the writer merges it to a no-op, so the bounce terminates.
-  if (JSON.stringify(C.syncable(state)) !== JSON.stringify(C.syncable(external))) save();
+
+  const differs = C.canon(C.syncable(state)) !== C.canon(C.syncable(external))
+    || !sameGen(contentGenOf(state), contentGenOf(external))
+    || !sameGen(bindingGenOf(state), bindingGenOf(external));
+  // A lower-generation tab already overwrote localStorage. Re-persisting the
+  // winner is mandatory, not an optimization. Equal-generation unions use
+  // the same write-back and terminate when every tab holds the same board.
+  if (differs) {
+    writeStateNow();
+    if (sync && sameGen(bindingGenOf(sync), bindingGenOf(state))) schedulePush();
+  }
+  if (bindingCmp !== 0 || contentCmp !== 0) reconcileStoredSync();
 }
 
 function flushExternal() {
   if (pendingExternal != null) {
-    const raw = pendingExternal;
+    const queued = pendingExternal;
     pendingExternal = null;
-    applyExternal(raw);
+    applyExternal(JSON.stringify(queued));
   }
   if (pendingRemote != null && sync) {
     const p = pendingRemote;
     pendingRemote = null;
-    applyRemote(p.remote, p.ver);
+    applyRemote(p.remote, p.ver, p.ctx);
   }
 }
 
 window.addEventListener('storage', e => {
   if (e.key === KEY && e.newValue != null) applyExternal(e.newValue);
+  if (e.key === SYNC_KEY) reconcileStoredSync();
 });
 
 /* ── device sync ───────────────────────────────────────────
@@ -226,14 +323,14 @@ window.addEventListener('storage', e => {
    stores only ciphertext under a hash (see relay/worker.js and
    docs/sync-spec.md). The engine pushes after every save, pulls on
    focus/visibility, and holds a WebSocket so another device's edit lands
-   here in about a second. Everything converges through C.merge, and every
-   apply is a merge — never a replace. */
+   here in about a second. Remote updates converge through C.merge; an
+   explicit Join/Replace is the only path that replaces local board data. */
 
 const RELAY = 'https://kanban-relay.quiet-bush-25b1.workers.dev';
 const SYNC_KEY = NS ? `board.sync.${NS}` : 'board.sync';
 
 let sync = null;        // { secret, ver } — presence = the feature is on
-let syncKeys = null;    // { token, key } derived from the secret, cached
+let syncKeys = null;    // { secret, token, key } derived from the active secret
 let syncStatus = 'off'; // off | ok | syncing | offline | error
 let syncedAt = null;    // epoch ms of the last successful exchange
 let remoteHead = '';    // serialized syncable known to equal the server head
@@ -243,16 +340,46 @@ let rejectedPayload = ''; // exact payload rejected as too large; retry only aft
 // the log or drop a tombstone from the server (the log only grows).
 let floor = null;
 let pendingRemote = null;
-// True from the moment a pairing link is adopted until that adoption's first
-// push lands: scanning a link means joining someone's board, so their stage
-// order wins rather than whichever clock happens to be higher.
+// True from an explicit Combine until its first push lands: the linked
+// board's stage order wins rather than whichever clock happens to be higher.
 let joiningOrder = false;
 let pushTimer = null, pushing = false, pullQueued = false, pulling = false;
 let syncRetryTimer = null, syncRetryAttempt = 0;
 let watchSock = null, watchRetry = 0;
 let uiDragLock = 0;     // column and project-row drags hold this
+let syncRuntimeEpoch = 0;
+let syncBindingSuspended = false;
 
-try { sync = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null'); } catch (err) { /* off */ }
+try {
+  const held = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null');
+  if (held && sameGen(bindingGenOf(held), bindingGenOf(state))) sync = held;
+} catch (err) { /* off */ }
+
+const captureSync = () => sync ? {
+  epoch: syncRuntimeEpoch,
+  secret: sync.secret,
+  binding: clone(bindingGenOf(sync)),
+} : null;
+const isCurrentSync = ctx => !!(ctx && sync
+  && !syncBindingSuspended
+  && ctx.epoch === syncRuntimeEpoch
+  && ctx.secret === sync.secret
+  && sameGen(ctx.binding, bindingGenOf(sync))
+  && sameGen(ctx.binding, bindingGenOf(state)));
+
+/** Invalidate every callback/request from the old relationship before board
+    state can change underneath it. The persisted config is handled by the
+    caller; this only cuts the live wire. */
+function suspendSyncRuntime() {
+  syncRuntimeEpoch++;
+  clearTimeout(pushTimer);
+  pushTimer = null;
+  clearSyncRetry();
+  dropWatch();
+  pushing = false;
+  pulling = false;
+  pullQueued = false;
+}
 
 function saveSyncConfig() {
   try {
@@ -261,17 +388,104 @@ function saveSyncConfig() {
   } catch (err) { /* sync still works this session */ }
 }
 
-async function ensureKeys() {
-  if (!syncKeys) syncKeys = await C.deriveSync(sync.secret);
-  return syncKeys;
+function clearSyncMemory() {
+  sync = null;
+  syncKeys = null;
+  remoteHead = '';
+  rejectedPayload = '';
+  floor = null;
+  pendingRemote = null;
+  joiningOrder = false;
+  syncBindingSuspended = false;
 }
 
-async function relayFetch(method, body, opts = {}) {
-  const { token } = await ensureKeys();
+let reconcilingSyncStorage = false;
+function reconcileStoredSync() {
+  if (reconcilingSyncStorage) return;
+  reconcilingSyncStorage = true;
+  try {
+    let rawBoard = null, config = null;
+    try {
+      rawBoard = localStorage.getItem(KEY);
+      config = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null');
+    } catch (err) { /* safest state is off */ }
+
+    if (rawBoard) {
+      let stored = null;
+      try { stored = C.migrate(JSON.parse(rawBoard)); } catch (err) { /* keep live board */ }
+      if (stored && (!sameGen(contentGenOf(stored), contentGenOf(state))
+          || !sameGen(bindingGenOf(stored), bindingGenOf(state)))) {
+        applyExternal(rawBoard);
+        if (pendingExternal) return; // barrier holds state; old runtime is already suspended
+      }
+    }
+
+    // The board is the commit record. A stale tab can finish an old-X request
+    // just after another tab commits Y and overwrite only SYNC_KEY with X's
+    // lower binding. If this runtime still owns the board's winning binding,
+    // reject that config write and restore the matching relationship. A real
+    // Disconnect writes a newer board binding first, so it cannot enter here.
+    const currentOwnsBoard = sync && sameGen(bindingGenOf(sync), bindingGenOf(state));
+    const configDisagrees = !config
+      || !sameGen(bindingGenOf(config), bindingGenOf(state))
+      || (currentOwnsBoard && config.secret !== sync.secret);
+    if (currentOwnsBoard && configDisagrees) {
+      syncBindingSuspended = false;
+      saveSyncConfig();
+      connectWatch();
+      return;
+    }
+
+    if (!config || !sameGen(bindingGenOf(config), bindingGenOf(state))) {
+      if (sync) suspendSyncRuntime();
+      clearSyncMemory();
+      setSyncStatus('off');
+      if (!syncEl.hidden) { syncView = 'off'; renderSync(); focusSyncState(); }
+      return;
+    }
+
+    if (sync && sync.secret === config.secret
+        && sameGen(bindingGenOf(sync), bindingGenOf(config))) {
+      syncBindingSuspended = false;
+      // Do not copy a newer version into memory before pulling it: pull uses
+      // the old number to recognize that the remote head must be applied.
+      if (config.ver !== sync.ver) pull();
+      else connectWatch();
+      return;
+    }
+
+    suspendSyncRuntime();
+    sync = config;
+    syncBindingSuspended = false;
+    syncKeys = null;
+    remoteHead = '';
+    rejectedPayload = '';
+    floor = null;
+    setSyncStatus('syncing');
+    reflectExternalBinding(config.secret);
+    connectWatch();
+    pull();
+  } finally {
+    reconcilingSyncStorage = false;
+  }
+}
+
+async function keysForContext(ctx) {
+  if (!ctx) throw new Error('sync stopped');
+  if (syncKeys && syncKeys.secret === ctx.secret) return syncKeys;
+  const derived = { secret: ctx.secret, ...(await C.deriveSync(ctx.secret)) };
+  if (!isCurrentSync(ctx)) throw new Error('stale sync');
+  syncKeys = derived;
+  return derived;
+}
+
+async function relayFetch(method, body, opts = {}, ctx = captureSync()) {
+  if (!ctx) throw new Error('sync stopped');
+  const derived = await keysForContext(ctx);
   return fetch(`${RELAY}/v1/board`, {
     method,
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${derived.token}`,
       ...(body ? { 'Content-Type': 'application/json' } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -303,11 +517,11 @@ const normalized = payload => C.canon(C.syncable(C.merge(payload, payload)));
 
 /** Fold a decrypted remote payload into the live board — a merge, never a
     replace, deferred while the interaction barrier is up. */
-function applyRemote(remote, ver) {
-  if (!sync) return;
+function applyRemote(remote, ver, ctx = captureSync()) {
+  if (!isCurrentSync(ctx)) return;
   if ((remote.v || 2) > 2) { setSyncStatus('error'); return; } // a newer app wrote this
   floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
-  if (syncBusy()) { pendingRemote = { remote, ver }; return; }
+  if (syncBusy()) { pendingRemote = { remote, ver, ctx }; return; }
   sync.ver = ver;
   saveSyncConfig();
   C.stampChanges(lastStamped, state, undefined, remote.tombstones); // pending drafts can explicitly restore
@@ -367,7 +581,8 @@ function retrySyncNow() {
 }
 
 async function push(opts = {}) {
-  if (!sync) return;
+  const ctx = captureSync();
+  if (!isCurrentSync(ctx)) return;
   if (pushing) { schedulePush(600); return; }
   if (pendingRemote) { schedulePush(1000); return; } // merge the held remote first
   // Never blind-write over a head this session has not seen: the floor is
@@ -392,14 +607,19 @@ async function push(opts = {}) {
   pushing = true;
   setSyncStatus('syncing');
   try {
-    for (let attempt = 0; attempt < 3 && sync; attempt++) {
+    for (let attempt = 0; attempt < 3 && isCurrentSync(ctx); attempt++) {
       const payload = C.syncable(state);
       const snap = C.canon(payload);
-      const { key } = await ensureKeys();
+      const { key } = await keysForContext(ctx);
+      if (!isCurrentSync(ctx)) return;
       const env = await C.seal(key, payload);
-      const res = await relayFetch('PUT', { baseVer: sync.ver || 0, env }, opts);
+      if (!isCurrentSync(ctx)) return;
+      const res = await relayFetch('PUT', { baseVer: sync.ver || 0, env }, opts, ctx);
+      if (!isCurrentSync(ctx)) return;
       if (res.status === 200) {
-        sync.ver = (await res.json()).ver;
+        const accepted = await res.json();
+        if (!isCurrentSync(ctx)) return;
+        sync.ver = accepted.ver;
         saveSyncConfig();
         remoteHead = snap;
         rejectedPayload = '';
@@ -414,8 +634,10 @@ async function push(opts = {}) {
       if (res.status === 409) {
         // Someone else wrote first: fold their head in, then retry from it.
         const head = await res.json();
+        if (!isCurrentSync(ctx)) return;
         const remote = head.env ? await C.unseal(key, head.env) : null;
-        if (remote) applyRemote(remote, head.ver);
+        if (!isCurrentSync(ctx)) return;
+        if (remote) applyRemote(remote, head.ver, ctx);
         else { sync.ver = head.ver; saveSyncConfig(); }
         if (pendingRemote) return; // the barrier holds the merge; settle resumes
         continue;
@@ -429,20 +651,24 @@ async function push(opts = {}) {
       }
       throw new Error(`relay ${res.status}`);
     }
-    scheduleSyncRetry(); // repeated contention: pull and try again later
+    if (isCurrentSync(ctx)) scheduleSyncRetry(); // repeated contention
   } catch (err) {
+    if (!isCurrentSync(ctx)) return;
     setSyncStatus('offline');
     scheduleSyncRetry();
   } finally {
-    pushing = false;
+    if (ctx.epoch === syncRuntimeEpoch) pushing = false;
   }
 }
 
 async function pull() {
   if (!sync || pulling) { pullQueued = !!sync; return; }
+  const ctx = captureSync();
+  if (!isCurrentSync(ctx)) return;
   pulling = true;
   try {
-    const res = await relayFetch('GET');
+    const res = await relayFetch('GET', null, {}, ctx);
+    if (!isCurrentSync(ctx)) return;
     if (res.status === 404) {
       if ((sync.ver || 0) > 0) { syncLost(); return; }
       schedulePush(0); // fresh enable — nothing on the server yet, seed it
@@ -451,11 +677,14 @@ async function pull() {
     if (res.status === 410) { syncLost(); return; }
     if (!res.ok) throw new Error(`relay ${res.status}`);
     const { ver, env } = await res.json();
-    const { key } = await ensureKeys();
+    if (!isCurrentSync(ctx)) return;
+    const { key } = await keysForContext(ctx);
+    if (!isCurrentSync(ctx)) return;
     const remote = await C.unseal(key, env);
+    if (!isCurrentSync(ctx)) return;
     syncedAt = Date.now();
     if (ver !== sync.ver) {
-      applyRemote(remote, ver);
+      applyRemote(remote, ver, ctx);
     } else {
       floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
       remoteHead = normalized(remote);
@@ -471,11 +700,14 @@ async function pull() {
       }
     }
   } catch (err) {
+    if (!isCurrentSync(ctx)) return;
     setSyncStatus('offline');
     scheduleSyncRetry();
   } finally {
-    pulling = false;
-    if (pullQueued) { pullQueued = false; pull(); }
+    if (ctx.epoch === syncRuntimeEpoch) {
+      pulling = false;
+      if (pullQueued) { pullQueued = false; pull(); }
+    }
   }
 }
 
@@ -486,9 +718,10 @@ async function pull() {
    covers re-entry. */
 
 function connectWatch() {
-  if (!sync || watchSock) return;
-  ensureKeys().then(({ token }) => {
-    if (!sync || watchSock) return;
+  const ctx = captureSync();
+  if (!isCurrentSync(ctx) || watchSock) return;
+  keysForContext(ctx).then(({ token }) => {
+    if (!isCurrentSync(ctx) || watchSock) return;
     let ws;
     try {
       ws = new WebSocket(`${RELAY.replace(/^http/, 'ws')}/v1/board/watch`, ['kanban.v1', token]);
@@ -496,22 +729,26 @@ function connectWatch() {
     watchSock = ws;
     // `live` vs `synced` is the difference between "a change will arrive" and
     // "I will go and ask", so the footer has to hear the socket settle.
-    ws.onopen = () => { watchRetry = 0; renderSyncStatus(); };
+    ws.onopen = () => {
+      if (!isCurrentSync(ctx) || watchSock !== ws) { try { ws.close(); } catch (err) { /* stale */ } return; }
+      watchRetry = 0;
+      renderSyncStatus();
+    };
     ws.onmessage = e => {
-      if (!sync) return;
+      if (!isCurrentSync(ctx) || watchSock !== ws) return;
       let m;
       try { m = JSON.parse(e.data); } catch (err) { return; }
       if (m.deleted) { syncLost(); return; }
       if (m.ver !== sync.ver) pull();
     };
     ws.onclose = () => {
-      if (watchSock !== ws) return;
+      if (!isCurrentSync(ctx) || watchSock !== ws) return;
       watchSock = null;
       renderSyncStatus();
-      if (sync) setTimeout(connectWatch, Math.min(30000, 1000 * 2 ** watchRetry++));
+      setTimeout(() => { if (isCurrentSync(ctx)) connectWatch(); }, Math.min(30000, 1000 * 2 ** watchRetry++));
     };
     ws.onerror = () => { try { ws.close(); } catch (err) { /* closing */ } };
-  });
+  }).catch(() => { /* a pull/retry reports transport state */ });
 }
 
 function dropWatch() {
@@ -551,7 +788,11 @@ window.addEventListener('pagehide', () => {
 /* ── sync lifecycle ───────────────────────────────────── */
 
 async function enableSync() {
-  sync = { secret: C.randomSecret(), ver: 0 };
+  suspendSyncRuntime();
+  state._bindingGen = nextGen(bindingGenOf(state));
+  lastStamped = clone(state);
+  if (!writeStateNow()) return false;
+  sync = { secret: C.randomSecret(), ver: 0, _bindingGen: clone(bindingGenOf(state)) };
   syncKeys = null;
   remoteHead = '';
   rejectedPayload = '';
@@ -565,20 +806,20 @@ async function enableSync() {
 
 /** Forget the secret on this device only; other devices keep syncing. */
 function syncStopped(msg) {
-  dropWatch();
-  clearTimeout(pushTimer);
-  clearSyncRetry();
-  joiningOrder = false;
-  sync = null;
-  syncKeys = null;
-  remoteHead = '';
-  rejectedPayload = '';
-  floor = null;
-  pendingRemote = null;
+  const oldSecret = sync && sync.secret;
+  if (sync) {
+    flushPendingSave();
+    suspendSyncRuntime();
+    state._bindingGen = nextGen(bindingGenOf(state), bindingGenOf(sync));
+    lastStamped = clone(state);
+    writeStateNow(); // board first: a crash cannot run old X against new state
+  }
+  clearSyncMemory();
   saveSyncConfig();
   setSyncStatus('off');
-  if (!$('#sync').hidden) renderSync();
+  if (!$('#sync').hidden) { syncView = 'off'; renderSync(); focusSyncState(); }
   if (msg) toast(msg, null, 8000);
+  return oldSecret;
 }
 
 /* "Failure is quiet" is right for a dropped connection and wrong for a
@@ -587,31 +828,32 @@ function syncStopped(msg) {
    are not — so this speaks once, then stops. */
 let saidSyncLost = false;
 function syncLost() {
-  dropWatch();
-  clearTimeout(pushTimer);
-  clearSyncRetry();
-  joiningOrder = false;
-  sync = null;
-  syncKeys = null;
-  remoteHead = '';
-  rejectedPayload = '';
-  floor = null;
-  pendingRemote = null;
+  if (sync) {
+    suspendSyncRuntime();
+    state._bindingGen = nextGen(bindingGenOf(state), bindingGenOf(sync));
+    lastStamped = clone(state);
+    writeStateNow();
+  }
+  clearSyncMemory();
   saveSyncConfig();
   setSyncStatus('gone');
-  if (!$('#sync').hidden) { syncView = 'off'; renderSync(); }
+  if (!$('#sync').hidden) { syncView = 'off'; renderSync(); focusSyncState(); }
   if (!saidSyncLost) { saidSyncLost = true; toast(tr('syncLost'), null, 8000); }
 }
 
 /** Wipe the relay copy — durable: the slot answers 410 from then on, and
     every synced device sees the broadcast and stops. */
 async function deleteFromServer() {
+  const ctx = captureSync();
+  if (!isCurrentSync(ctx)) return false;
   try {
-    const res = await relayFetch('DELETE');
+    const res = await relayFetch('DELETE', null, {}, ctx);
+    if (!isCurrentSync(ctx)) return false;
     if (res.status !== 204 && res.status !== 410) throw new Error(`relay ${res.status}`);
     syncStopped(); // forget the key only after the relay confirms the outcome
     return true;
   } catch (err) {
+    if (!isCurrentSync(ctx)) return false;
     setSyncStatus('offline');
     return false;
   }
@@ -624,88 +866,155 @@ const syncLink = () => {
   return `${base}#sync=${sync.secret}`;
 };
 
-/* Second-device pairing: the #sync= link, which is the feature's whole
-   first-run experience on a phone — so it gets a state of the sheet rather
-   than a toast that evaporates. The secret stays in memory until adoption
-   succeeds, which is what makes "the link still works, try again" true.
-
-   A board still wearing its first-run seed marker is replaced outright:
-   merging would leak the starter card into the real board. Anything else
-   merges — a union, so nothing is lost. Both paths offer Undo anyway: the
-   seed marker is a marker, and the cost of being wrong is somebody's board. */
+/* Candidate inspection is deliberately side-effect free. It never borrows
+   the active sync globals: a bad Y link cannot knock this device off X, and a
+   late candidate response cannot act after Cancel or another link. */
 let pendingSecret = null;
+let pendingCandidate = null;
+let joinAttempt = 0;
 
-async function adoptFromLink(secret) {
-  pendingSecret = secret;
-  const pristine = state.seed === true;
-  const before = clone(state);
-  // A pristine board is replaced outright, so there is no order to contest.
-  joiningOrder = !pristine;
-  syncView = 'adopting';
-  if ($('#sync').hidden) openSync('adopting'); else renderSync();
+function reflectExternalBinding(secret) {
+  if ($('#sync').hidden) return;
+  const candidate = pendingSecret;
+  joinAttempt++;
+  pendingSecret = null;
+  pendingCandidate = null;
+  syncNoticeKey = candidate === secret ? 'alreadyConnected' : null;
+  syncView = candidate && candidate !== secret ? 'blocked' : 'on';
+  renderSync();
+  focusSyncState();
+}
 
-  sync = { secret, ver: 0 };
-  syncKeys = null;
-  remoteHead = '';
-  rejectedPayload = '';
-  floor = null;
-  try {
-    if (C.b64uToBytes(secret).length !== 32) throw Object.assign(new Error('bad secret'), { gone: true });
-    const res = await relayFetch('GET');
-    if (res.status === 410 || res.status === 404) {
-      // 404 with a fresh secret can only mean the link's board is gone: a
-      // link is only ever handed out after its first PUT.
-      throw Object.assign(new Error('no board'), { gone: true });
-    }
-    if (!res.ok) throw new Error(`relay ${res.status}`);
-    const { ver, env } = await res.json();
-    const { key } = await ensureKeys();
-    const remote = await C.unseal(key, env);
-    if ((remote.v || 2) > 2) throw Object.assign(new Error('newer schema'), { gone: true });
+const permanentCandidateError = message => Object.assign(new Error(message), { permanent: true });
+const candidateBoardShape = raw => {
+  if (!raw || typeof raw !== 'object' || (raw.v || 2) > 2) return false;
+  if (!Array.isArray(raw.columns) || !raw.columns.length
+      || !raw.columns.every(c => c && typeof c.id === 'string' && typeof c.name === 'string')) return false;
+  if (!Array.isArray(raw.projects)
+      || !raw.projects.every(p => p && typeof p.id === 'string' && typeof p.name === 'string')) return false;
+  if (!Array.isArray(raw.tasks)
+      || !raw.tasks.every(t => t && typeof t.id === 'string'
+        && typeof t.title === 'string' && typeof t.columnId === 'string')) return false;
+  if (!Array.isArray(raw.events)
+      || !raw.events.every(e => e && typeof e.id === 'string' && typeof e.taskId === 'string')) return false;
+  return !raw.tombstones || (typeof raw.tombstones === 'object' && !Array.isArray(raw.tombstones));
+};
 
-    if (pristine) {
-      state = C.migrate({ ...state, ...remote });
-      delete state.seed;
-      lastStamped = clone(state);
-      sync.ver = ver;
-      remoteHead = normalized(remote);
-      floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
-      save();
-      render();
-      setSyncStatus('ok');
-      syncedAt = Date.now();
-    } else {
-      applyRemote(remote, ver);
-    }
-    saveSyncConfig();   // only now: adoption succeeded
+async function inspectCandidate(secret) {
+  if (sync) {
     pendingSecret = null;
-    connectWatch();
-    syncView = 'on';
-    renderSync();
+    pendingCandidate = null;
+    joinAttempt++;
+    syncView = secret === sync.secret ? 'on' : 'blocked';
+    syncNoticeKey = secret === sync.secret ? 'alreadyConnected' : null;
+    if ($('#sync').hidden) openSync(syncView);
+    else { renderSync(); focusSyncState(); }
+    return;
+  }
 
-    const n = state.tasks.filter(onBoard).length;
-    toast(pristine ? tr('paired', { n }) : tr('merged'), () => {
-      // back the link out entirely: the board it replaced, and no secret
-      syncStopped();
-      state = before;
-      lastStamped = clone(state);
-      save();
-      render();
-      syncView = 'off';
-      renderSync();
-    });
+  const attempt = ++joinAttempt;
+  pendingSecret = secret;
+  pendingCandidate = null;
+  syncView = 'checking';
+  if ($('#sync').hidden) openSync('checking');
+  else { renderSync(); focusSyncState(); }
+
+  try {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(secret) || C.b64uToBytes(secret).length !== 32) {
+      throw permanentCandidateError('bad secret');
+    }
+    const keys = await C.deriveSync(secret);
+    if (attempt !== joinAttempt || sync) return;
+    let res;
+    try {
+      res = await fetch(`${RELAY}/v1/board`, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${keys.token}` },
+      });
+    } catch (err) {
+      throw Object.assign(err, { retryable: true });
+    }
+    if (attempt !== joinAttempt || sync) return;
+    if ([408, 429].includes(res.status) || res.status >= 500) {
+      throw Object.assign(new Error(`relay ${res.status}`), { retryable: true });
+    }
+    if (!res.ok) throw permanentCandidateError(`relay ${res.status}`);
+
+    let head;
+    try { head = await res.json(); } catch (err) { throw permanentCandidateError('bad response'); }
+    if (attempt !== joinAttempt || sync) return;
+    if (!head || !Number.isSafeInteger(head.ver) || head.ver < 0 || !head.env) {
+      throw permanentCandidateError('bad response');
+    }
+
+    let raw;
+    try { raw = await C.unseal(keys.key, head.env); }
+    catch (err) { throw permanentCandidateError('cannot decrypt'); }
+    if (attempt !== joinAttempt || sync) return;
+    if (!candidateBoardShape(raw)) throw permanentCandidateError('bad board');
+    let remote;
+    try { remote = C.migrate(raw); }
+    catch (err) { throw permanentCandidateError('bad board'); }
+
+    pendingCandidate = { secret, keys, ver: head.ver, remote };
+    if (state.seed === true) commitCandidate('replace');
+    else { syncView = 'choose'; renderSync(); focusSyncState(); }
   } catch (err) {
-    sync = null;
-    syncKeys = null;
-    joiningOrder = false;
-    saveSyncConfig();
-    syncFailMsg = err && err.gone ? 'gone' : 'offline';
+    if (attempt !== joinAttempt || sync) return;
+    pendingCandidate = null;
+    syncFailMsg = err && (err.retryable || !err.permanent) ? 'offline' : 'gone';
     syncView = 'failed';
     setSyncStatus('off');
-    if ($('#sync').hidden) openSync('failed'); else renderSync();
+    renderSync();
+    focusSyncState();
   }
 }
 
+function commitCandidate(mode) {
+  const candidate = pendingCandidate;
+  if (!candidate || sync) return;
+  joinAttempt++;
+  pendingCandidate = null;
+  pendingSecret = null;
+  suspendSyncRuntime();
+
+  const oldContent = contentGenOf(state);
+  const oldBinding = bindingGenOf(state);
+  let next = mode === 'combine'
+    ? C.merge(state, candidate.remote, { preferOrder: 'remote' })
+    : linkedReplacement(candidate.remote);
+  next._contentGen = clone(mode === 'replace' ? nextGen(oldContent) : oldContent);
+  next._bindingGen = nextGen(oldBinding);
+  delete next.seed;
+  if (!installLocalState(next)) {
+    syncView = 'failed';
+    syncFailMsg = 'offline';
+    renderSync();
+    focusSyncState();
+    return;
+  }
+
+  sync = {
+    secret: candidate.secret,
+    ver: candidate.ver,
+    _bindingGen: clone(bindingGenOf(state)),
+  };
+  syncKeys = { secret: candidate.secret, ...candidate.keys };
+  remoteHead = normalized(candidate.remote);
+  rejectedPayload = '';
+  floor = { events: candidate.remote.events || [], tombstones: candidate.remote.tombstones || {} };
+  joiningOrder = mode === 'combine';
+  saveSyncConfig(); // board was written first and carries the matching binding
+  syncNoticeKey = mode === 'combine' ? 'combinedLinked' : 'connectedLinked';
+  setSyncStatus('ok');
+  syncedAt = Date.now();
+  syncView = 'on';
+  render();
+  renderSync();
+  focusSyncState();
+  connectWatch();
+  if (mode === 'combine' && syncableStr(state) !== remoteHead) schedulePush(0);
+}
 
 const byId = id => state.tasks.find(t => t.id === id);
 const projectOf = t => state.projects.find(p => p.id === t.projectId) || null;
@@ -2119,17 +2428,16 @@ archEmptyBtn.onclick = () => {
 $('[data-close]', archiveEl).onclick = closeArchive;
 
 /* ── sync sheet ────────────────────────────────────────────
-   One shell, four states: off (the pitch and Enable), on (the QR, the link
-   and the two exits), adopting (a #sync= link is being opened on this
-   device) and failed. `syncView` says which. No standing chrome anywhere
-   else — the board itself is the status display, and cards arriving is what
-   "sync works" looks like; the ⋯ menu's tick is how a user learns, months
-   later, that this board leaves the machine. */
+   One shell owns both sides of pairing: Start shares this board; Join accepts
+   the same link on a desktop. Candidate inspection is a state, not a mutation,
+   and a real local board chooses Replace or Combine explicitly. */
 
 const syncEl = $('#sync');
-let syncView = 'off';       // off | on | adopting | failed
+let syncView = 'off';       // off | join | checking | blocked | choose | failed | on | end
 let syncFailMsg = null;     // which failure the failed view explains
 let syncingSince = 0;       // when the in-flight push started
+let syncNoticeKey = null;   // transient inline result for the connected view
+let syncReturnFocus = null;
 
 $('[data-close]', syncEl).innerHTML = ICON.close;
 $('#sync-copy').innerHTML = ICON.copy;
@@ -2150,7 +2458,7 @@ function syncWhen(ms) {
     moving the board (see flip()), and a status line flickering every time
     the phone saves would undo that explanation. */
 function syncStatusLine() {
-  if (syncView === 'adopting') return tr('pairingStatus');
+  if (syncView === 'checking') return tr('checkingLink');
   if (syncView === 'failed') return syncFailMsg === 'gone' ? tr('linkNotFound') : tr('syncNoAnswer');
   if (!sync) return '';
   switch (syncStatus) {
@@ -2212,29 +2520,90 @@ function qrSvg(text) {
     + ` shape-rendering="crispEdges"><path d="${d}"/></svg>`;
 }
 
+function boardSignature(st, label) {
+  const cards = (st.tasks || []).length;
+  const stages = (st.columns || []).length;
+  return `${label} · ${cards} ${tr(cards === 1 ? 'card' : 'cards')}`
+    + ` · ${stages} ${tr(stages === 1 ? 'stage' : 'stages')}`;
+}
+
+function setSyncOutsideInert(on) {
+  for (const el of document.body.children) {
+    if (el === syncEl || el === scrim || el.tagName === 'SCRIPT') continue;
+    el.inert = on;
+  }
+}
+
+function focusSyncState() {
+  requestAnimationFrame(() => {
+    if (syncEl.hidden) return;
+    if (syncView === 'join') { $('#sync-join-input').focus(); return; }
+    if (syncView === 'off') { $('#sync-enable').focus(); return; }
+    if (syncView === 'on') { $('#sync-url').focus(); $('#sync-url').select(); return; }
+    $('#sync-state-title').focus();
+  });
+}
+
+syncEl.addEventListener('keydown', e => {
+  if (e.key !== 'Tab') return;
+  const focusable = $$('button:not([hidden]):not([disabled]), input:not([hidden]):not([disabled]), [tabindex]:not([tabindex="-1"])', syncEl)
+    .filter(el => !el.closest('[hidden]'));
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable[focusable.length - 1];
+  if (e.shiftKey && (document.activeElement === first || document.activeElement === $('#sync-state-title'))) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
+
 function renderSync() {
   if (syncEl.hidden) return;
   const view = syncView;
+  const title = $('#sync-state-title');
   const say = $('#sync-say');
+  const titleKey = view === 'off' || view === 'join' ? 'syncOffTitle'
+    : view === 'checking' ? 'checkingLink'
+    : view === 'blocked' ? 'alreadyOtherTitle'
+    : view === 'choose' ? 'chooseJoinTitle'
+    : view === 'failed' ? (syncFailMsg === 'gone' ? 'deadLinkTitle' : 'offlineLinkTitle')
+    : view === 'end' ? 'endSyncTitle' : 'addDevice';
+  const sayKey = view === 'off' || view === 'join' ? 'syncPitch'
+    : view === 'blocked' ? 'alreadyOtherBody'
+    : view === 'choose' ? 'chooseJoinBody'
+    : view === 'failed' ? (syncFailMsg === 'gone' ? 'deadLinkBody' : 'offlineLinkBody')
+    : view === 'end' ? 'endSyncBody'
+    : view === 'on' && syncNoticeKey ? syncNoticeKey : null;
+  title.textContent = tr(titleKey);
+  say.hidden = !sayKey;
+  say.textContent = sayKey ? tr(sayKey) : '';
 
+  $('#sync-join').hidden = view !== 'join';
+  $('#sync-choice').hidden = view !== 'choose';
   $('#sync-pair').hidden = view !== 'on';
-  say.hidden = view === 'on';
-  say.textContent = view === 'adopting' ? tr('adopting')
-    : view === 'failed' ? tr(syncFailMsg === 'gone' ? 'adoptBadLink' : 'adoptOffline')
-    : tr('syncPitch');
+  $('#sync-actions').hidden = view !== 'on';
 
+  $('#sync-join-label').textContent = tr('pasteSyncLink');
+  $('#sync-join-go').textContent = tr('continue');
   $('#sync-enable').hidden = view !== 'off';
   $('#sync-enable').textContent = tr('enableSync');
+  $('#sync-join-open').hidden = view !== 'off';
+  $('#sync-join-open').textContent = tr('joinSyncLink');
+  $('#sync-view').hidden = view !== 'blocked';
+  $('#sync-view').textContent = tr('viewCurrentSync');
+  $('#sync-cancel').hidden = !['join', 'checking', 'choose', 'failed', 'end'].includes(view);
+  $('#sync-cancel').textContent = tr('cancel');
   $('#sync-retry').hidden = !(view === 'failed' && syncFailMsg === 'offline');
   $('#sync-retry').textContent = tr('tryAgain');
-  $('#sync-stop').hidden = view !== 'on';
-  $('#sync-stop').textContent = tr('stopSync');
-  const del = $('#sync-del');
-  del.hidden = view !== 'on';
-  del.textContent = armed.has('sync-delete')
-    ? `${tr('deleteFromServer')} — ${tr('sure')}`
-    : tr('deleteFromServer');
-  del.classList.toggle('armed', armed.has('sync-delete'));
+  $('#sync-end-confirm').hidden = view !== 'end';
+  $('#sync-end-confirm').textContent = tr('endSync');
+
+  if (view === 'choose' && pendingCandidate) {
+    $('#sync-replace-label').textContent = tr('replaceLinked');
+    $('#sync-replace-desc').textContent = tr('replaceLinkedDesc');
+    $('#sync-combine-label').textContent = tr('combineBoards');
+    $('#sync-combine-desc').textContent = tr('combineBoardsDesc');
+    $('#sync-linked-signature').textContent = boardSignature(pendingCandidate.remote, tr('linkedBoard'));
+    $('#sync-local-signature').textContent = boardSignature(state, tr('thisDevice'));
+    $('#sync-export').textContent = tr('exportCurrent');
+  }
 
   if (view === 'on') {
     const link = syncLink();
@@ -2248,30 +2617,44 @@ function renderSync() {
       plate.hidden = !ok;
       if (ok) plate.innerHTML = qrSvg(syncLink());
     });
+    $('#sync-stop-label').textContent = tr('disconnectDevice');
+    $('#sync-stop-desc').textContent = tr('disconnectDesc');
+    $('#sync-del-label').textContent = tr('endSyncAll');
+    $('#sync-del-desc').textContent = tr('endSyncAllDesc');
   }
 
   renderSyncStatus();
 }
 
-function openSync(view) {
+function openSync(view, returnFocus = null) {
   closeComposer();
   disarm();
+  if (syncEl.hidden) {
+    const active = document.activeElement;
+    syncReturnFocus = returnFocus
+      || (active && active.closest && active.closest('#menu') ? $('#menuBtn') : active);
+  }
   syncView = view || (sync ? 'on' : 'off');
   syncEl.hidden = false;
   scrim.hidden = false;
+  setSyncOutsideInert(true);
   renderSync();
-  requestAnimationFrame(() => {
-    if (syncView === 'on') { const u = $('#sync-url'); u.focus(); u.select(); }
-    else if (syncView === 'off') $('#sync-enable').focus();
-  });
+  focusSyncState();
 }
 
 function closeSync() {
+  joinAttempt++;
+  pendingCandidate = null;
+  pendingSecret = null;
   syncEl.hidden = true;
   disarm();
-  // A failed adopt leaves nothing behind: next time this is the off state.
-  if (syncView !== 'on') syncView = sync ? 'on' : 'off';
+  syncNoticeKey = null;
+  syncView = sync ? 'on' : 'off';
+  setSyncOutsideInert(false);
   syncScrim();
+  const back = syncReturnFocus;
+  syncReturnFocus = null;
+  if (back && back.isConnected && typeof back.focus === 'function') back.focus();
 }
 
 $('[data-close]', syncEl).onclick = closeSync;
@@ -2286,11 +2669,52 @@ $('#sync-enable').onclick = async () => {
   if (!ok) { toast(tr('syncFailed')); syncStopped(); renderSync(); return; }
   syncView = 'on';
   renderSync();
+  focusSyncState();
 };
 
 $('#sync-retry').onclick = () => {
   if (!pendingSecret) { closeSync(); return; }
-  adoptFromLink(pendingSecret);
+  inspectCandidate(pendingSecret);
+};
+
+$('#sync-join-open').onclick = () => { syncView = 'join'; renderSync(); focusSyncState(); };
+
+function parseSyncEntry(value) {
+  const text = value.trim();
+  if (/^[A-Za-z0-9_-]{43}$/.test(text)) return { secret: text, search: location.search };
+  let url;
+  try { url = new URL(text); } catch (err) { return null; }
+  const match = url.hash.match(/[#&]sync=([A-Za-z0-9_-]{43})(?:&|$)/);
+  return match ? { secret: match[1], search: url.search } : null;
+}
+
+$('#sync-join').onsubmit = e => {
+  e.preventDefault();
+  const input = $('#sync-join-input');
+  const parsed = parseSyncEntry(input.value);
+  input.value = '';
+  if (!parsed) {
+    syncFailMsg = 'gone';
+    syncView = 'failed';
+    renderSync();
+    focusSyncState();
+    return;
+  }
+  if (parsed.search !== location.search) {
+    location.assign(`${location.pathname}${parsed.search}#sync=${parsed.secret}`);
+    return;
+  }
+  inspectCandidate(parsed.secret);
+};
+
+$('#sync-replace').onclick = () => commitCandidate('replace');
+$('#sync-combine').onclick = () => commitCandidate('combine');
+$('#sync-export').onclick = exportBackup;
+$('#sync-view').onclick = () => { syncNoticeKey = null; syncView = 'on'; renderSync(); focusSyncState(); };
+$('#sync-cancel').onclick = () => {
+  if (syncView === 'end') { syncView = 'on'; renderSync(); focusSyncState(); return; }
+  if (syncView === 'join') { syncView = 'off'; renderSync(); focusSyncState(); return; }
+  closeSync();
 };
 
 /* Copy confirms in place, the way the editor's session line does — no toast.
@@ -2312,12 +2736,16 @@ $('#sync-copy').onclick = async () => {
    other safety idiom instead. undo() cannot serve: it restores board state,
    and the secret lives outside state by design. */
 $('#sync-stop').onclick = () => {
-  const was = sync;
+  const was = sync && clone(sync);
   syncStopped();
-  syncView = 'off';
-  renderSync();
+  closeSync();
   toast(tr('syncStopped'), () => {
-    sync = was;
+    if (!was || sync) return;
+    suspendSyncRuntime();
+    state._bindingGen = nextGen(bindingGenOf(state), bindingGenOf(was));
+    lastStamped = clone(state);
+    if (!writeStateNow()) return;
+    sync = { ...was, _bindingGen: clone(bindingGenOf(state)) };
     syncKeys = null;
     remoteHead = '';
     rejectedPayload = '';
@@ -2325,27 +2753,24 @@ $('#sync-stop').onclick = () => {
     saveSyncConfig();
     connectWatch();
     pull();
-    syncView = 'on';
-    renderSync();
   });
 };
 
-/* Deleting the server copy ends sync on every device, so it takes the
-   archive's armed two-step — and no Undo, because undoing means a network
-   write that can itself fail, and a recovery that may not work is worse
-   than none. It must also forget the local secret, or this device's push
-   loop would recreate the blob and the delete would look broken. */
-$('#sync-del').onclick = async () => {
-  if (!armed.has('sync-delete')) { arm('sync-delete', renderSync); return; }
-  disarm();
+$('#sync-del').onclick = () => { syncView = 'end'; renderSync(); focusSyncState(); };
+
+$('#sync-end-confirm').onclick = async () => {
+  const b = $('#sync-end-confirm');
+  b.disabled = true;
   const deleted = await deleteFromServer();
+  b.disabled = false;
   if (!deleted) {
+    syncView = 'on';
     renderSync();
+    focusSyncState();
     toast(tr('syncDeleteFailed'), null, 8000);
     return;
   }
-  syncView = 'off';
-  renderSync();
+  closeSync();
   toast(tr('serverDeleted'));
 };
 
@@ -2380,7 +2805,7 @@ menu.addEventListener('click', e => {
   if (act === 'archive-last') archiveLastColumn();
   if (act === 'export') exportBackup();
   if (act === 'import') $('#importFile').click();
-  if (act === 'sync') openSync();
+  if (act === 'sync') openSync(null, $('#menuBtn'));
 });
 
 // The menu is the only place that names the last stage, so label it live.
@@ -2426,13 +2851,19 @@ $('#importFile').addEventListener('change', async e => {
   try {
     const next = JSON.parse(await file.text());
     if (!Array.isArray(next.columns) || !Array.isArray(next.tasks)) throw new Error('shape');
-    snapshot();
+    snapshot(!sync);
     const incoming = C.migrate(next); // also upgrades a v1 backup on the way in
     // While synced, importing MERGES. A replace would push a snapshot that
     // shrinks the relay's event log — and the log is the only copy of the
     // history, so no import may be able to truncate it for every device.
-    state = sync ? C.merge(incoming, state) : incoming;
-    save();
+    if (sync) {
+      state = C.merge(incoming, state);
+      save();
+    } else {
+      incoming._contentGen = nextGen(contentGenOf(state), contentGenOf(incoming));
+      incoming._bindingGen = clone(maxGen(bindingGenOf(state), bindingGenOf(incoming)));
+      installLocalState(incoming);
+    }
     render();
     toast(`Imported ${state.tasks.length} tasks`, undo);
   } catch (err) {
@@ -2513,14 +2944,27 @@ function deleteForever(ids) {
 /* ── undo + toast ──────────────────────────────────────── */
 
 let undoSnap = null;
+let undoReplacesBoard = false;
 
-function snapshot() { undoSnap = clone(state); }
+function snapshot(replacesBoard = false) {
+  undoSnap = clone(state);
+  undoReplacesBoard = replacesBoard;
+}
 
 function undo() {
   if (!undoSnap) return;
-  state = undoSnap;
+  const replacement = undoReplacesBoard;
+  const next = undoSnap;
   undoSnap = null;
-  save();
+  undoReplacesBoard = false;
+  if (replacement) {
+    next._contentGen = nextGen(contentGenOf(state), contentGenOf(next));
+    next._bindingGen = clone(maxGen(bindingGenOf(state), bindingGenOf(next)));
+    installLocalState(next);
+  } else {
+    state = next;
+    save();
+  }
   render();
 }
 
@@ -2945,29 +3389,46 @@ window.__board = {
   set repWeek(v) { repWeek = v; },
   get sync() { return sync; },
   set sync(v) {
-    clearSyncRetry();
-    sync = v;
+    suspendSyncRuntime();
+    sync = v ? { ...v, _bindingGen: clone(v._bindingGen || bindingGenOf(state)) } : null;
     syncKeys = null;
     remoteHead = '';
     rejectedPayload = '';
     floor = null;
   },
   get syncStatus() { return syncStatus; },
+  get contentGen() { return contentGenOf(state); },
+  get bindingGen() { return bindingGenOf(state); },
 };
 
 render();
 
-/* Sync starts last, once there is a board on screen to sync. A `#sync=` link
-   opens the sheet in its adopting state on this same paint, so the first-run
-   demo card never flashes and vanishes behind it. */
+/* Sync starts last, once there is a board on screen. A `#sync=` link is
+   removed from the address bar immediately, then opens the checking state;
+   an existing relationship still starts its normal watch/pull independently. */
+
+let candidatePresentation = 0;
+function presentCandidateWhenSettled(secret) {
+  const id = ++candidatePresentation;
+  closeComposer();
+  if (!editor.hidden) saveEditor();
+  closeProjects(); closeReport(); closeArchive();
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  const settle = () => {
+    if (id !== candidatePresentation) return;
+    if (syncBusy()) { setTimeout(settle, 50); return; }
+    inspectCandidate(secret);
+  };
+  settle();
+}
 
 function adoptFromHash() {
-  const m = location.hash.match(/[#&]sync=([A-Za-z0-9_-]{43})/);
+  const m = location.hash.match(/[#&]sync=([A-Za-z0-9_-]{43})(?:&|$)/);
   if (!m) return false;
   // The secret must not linger in the URL bar, in history, or in whatever the
   // phone's share sheet would copy.
   history.replaceState(null, '', location.pathname + location.search);
-  adoptFromLink(m[1]);
+  presentCandidateWhenSettled(m[1]);
   return true;
 }
 
@@ -2975,7 +3436,8 @@ function adoptFromHash() {
 // change, not a load — no reload, so the boot path below never sees it.
 window.addEventListener('hashchange', adoptFromHash);
 
-if (!adoptFromHash() && sync) {
+adoptFromHash();
+if (sync) {
   connectWatch();
   pull();
 }

@@ -78,6 +78,31 @@ const colOf = title => {
   return card ? card.closest('.col').querySelector('.col-name').textContent : null;
 };
 
+async function candidateBoard(title) {
+  const C = W.BoardCore;
+  const remote = JSON.parse(JSON.stringify(W.__board.state));
+  delete remote.seed;
+  delete remote._contentGen;
+  delete remote._bindingGen;
+  remote.tasks = [];
+  remote.events = [];
+  remote.tombstones = {};
+  const now = Date.now();
+  remote.tasks.push({
+    id: C.uid(), title, notes: '', projectId: null, session: '', flag: false,
+    columnId: remote.columns[1].id, order: 0, createdAt: now, updatedAt: now,
+  });
+  C.stampChanges({ ...remote, tasks: [] }, remote, now);
+  const secret = C.randomSecret();
+  const keys = await C.deriveSync(secret);
+  const env = await C.seal(keys.key, C.syncable(remote));
+  return { secret, remote, keys, head: { ver: 2, env } };
+}
+
+const jsonResponse = (body, status = 200) => new W.Response(JSON.stringify(body), {
+  status, headers: { 'Content-Type': 'application/json' },
+});
+
 /** Open the report on the current week. On Mondays openReport shows the week
     that just ended, which would hide the activity these tests create today. */
 async function openThisWeek() {
@@ -680,6 +705,31 @@ frame.addEventListener('load', async function run() {
     assert(colOf('Draft saved after delete'), 'saving settled the draft before the delete merged');
   });
 
+  await test('a deferred replacement cannot be overwritten by a later stale tab event', async () => {
+    await reset();
+    const local = W.addTask({ title: 'Pre-replacement work' });
+    await sleep(250);
+    W.openEditor(local.id);
+
+    const stale = JSON.parse(JSON.stringify(W.__board.state));
+    const replacement = JSON.parse(JSON.stringify(stale));
+    replacement.tasks = replacement.tasks.filter(t => t.id !== local.id);
+    replacement.tasks.push({
+      id: W.BoardCore.uid(), title: 'Winning replacement', notes: '', projectId: null,
+      session: '', flag: false, columnId: replacement.columns[0].id, order: 0,
+      createdAt: Date.now(), updatedAt: Date.now(), mt: Date.now(),
+    });
+    replacement._contentGen = { at: Date.now() + 1000, id: 'high-content' };
+
+    W.applyExternal(JSON.stringify(replacement));
+    W.applyExternal(JSON.stringify(stale));
+    assert(colOf('Pre-replacement work'), 'the interaction barrier still holds the board on screen');
+    W.closeEditor();
+    await sleep(80);
+    assert(colOf('Winning replacement'), 'the highest queued generation won after the editor settled');
+    eq(colOf('Pre-replacement work'), null, 'the later stale event did not replace the queued winner');
+  });
+
   await test('a stale upload merges a 409 head and retries with both devices’ work', async () => {
     await reset();
     const C = W.BoardCore;
@@ -778,6 +828,305 @@ frame.addEventListener('load', async function run() {
       W.syncStopped();
       W.fetch = realFetch;
     }
+  });
+
+  await test('desktop join accepts a full link or raw secret and rejects malformed text locally', async () => {
+    await reset();
+    D.querySelector('#menuBtn').click();
+    D.querySelector('#act-sync').click();
+    await sleep(30);
+    W.closeSync();
+    eq(D.activeElement, D.querySelector('#menuBtn'), 'closing returns focus to the visible menu trigger');
+
+    const secret = W.BoardCore.randomSecret();
+    const full = W.parseSyncEntry(`https://kanban.page/app/?ns=test#sync=${secret}`);
+    eq(full.secret, secret, 'the secret was parsed from a full link');
+    eq(full.search, '?ns=test', 'the board namespace stays attached to the link');
+    eq(W.parseSyncEntry(secret).secret, secret, 'a raw secret is accepted too');
+    eq(W.parseSyncEntry(`https://kanban.page/app/#sync=${secret}x`), null, 'a corrupted extra character is rejected');
+
+    const before = W.BoardCore.canon(W.__board.state);
+    const realFetch = W.fetch;
+    let fetches = 0;
+    try {
+      W.fetch = async () => { fetches++; throw new Error('must not fetch malformed text'); };
+      W.openSync('off');
+      D.querySelector('#sync-join-open').click();
+      const input = D.querySelector('#sync-join-input');
+      input.value = 'not a sync link';
+      D.querySelector('#sync-join').dispatchEvent(new W.Event('submit', { bubbles: true, cancelable: true }));
+      await sleep(40);
+      eq(fetches, 0, 'malformed text never reached the relay');
+      eq(input.value, '', 'the pasted capability was cleared immediately');
+      eq(W.BoardCore.canon(W.__board.state), before, 'the local board was untouched');
+      eq(W.localStorage.getItem('board.sync.test'), null, 'no relationship was created');
+    } finally {
+      W.closeSync();
+      W.fetch = realFetch;
+    }
+  });
+
+  await test('an active board blocks a different link and treats its own link as a no-op', async () => {
+    await reset();
+    const current = W.BoardCore.randomSecret();
+    const other = W.BoardCore.randomSecret();
+    const before = W.BoardCore.canon(W.__board.state);
+    const realFetch = W.fetch;
+    let fetches = 0;
+    try {
+      W.fetch = async () => { fetches++; throw new Error('candidate fetch was forbidden'); };
+      W.__board.sync = { secret: current, ver: 7 };
+      await W.inspectCandidate(other);
+      eq(D.querySelector('#sync-state-title').textContent, 'Already syncing another board');
+      eq(fetches, 0, 'the other capability was not inspected');
+      eq(W.__board.sync.secret, current, 'the current relationship stayed active');
+      eq(W.__board.sync.ver, 7, 'its version was not reset');
+      eq(W.BoardCore.canon(W.__board.state), before, 'its board did not change');
+
+      await W.inspectCandidate(current);
+      eq(D.querySelector('#sync-state-title').textContent, 'Add another device');
+      eq(D.querySelector('#sync-say').textContent, 'Already connected to this board.');
+      eq(fetches, 0, 'the same link did not trigger candidate I/O either');
+
+      const work = W.BoardCore.canon(W.BoardCore.syncable(W.__board.state));
+      D.querySelector('#sync-stop').click();
+      await sleep(30);
+      eq(W.__board.sync, null, 'Disconnect forgot only this device\'s relationship');
+      eq(W.BoardCore.canon(W.BoardCore.syncable(W.__board.state)), work, 'Disconnect kept the complete local board');
+      assert(D.querySelector('#sync').hidden, 'Disconnect closed the relationship sheet cleanly');
+    } finally {
+      W.closeSync();
+      W.syncStopped();
+      W.fetch = realFetch;
+    }
+  });
+
+  await test('a pristine device adopts the linked board without uploading its starter card', async () => {
+    await reset();
+    const candidate = await candidateBoard('Linked only');
+    const realFetch = W.fetch;
+    const RealWebSocket = W.WebSocket;
+    let puts = 0;
+    try {
+      W.WebSocket = class { constructor() { throw new Error('socket unavailable in test'); } };
+      W.fetch = async (_url, opts = {}) => {
+        if (opts.method === 'GET') return jsonResponse(candidate.head);
+        if (opts.method === 'PUT') { puts++; return jsonResponse({ ver: 3 }); }
+        throw new Error(`unexpected ${opts.method}`);
+      };
+      await W.inspectCandidate(candidate.secret);
+      await sleep(80);
+      eq(W.__board.sync.secret, candidate.secret, 'the candidate became the active relationship');
+      assert(colOf('Linked only'), 'the linked card is visible');
+      eq(colOf('Drag me to another stage'), null, 'starter content was replaced');
+      eq(puts, 0, 'Replace did not contaminate the linked board');
+    } finally {
+      W.closeSync();
+      W.syncStopped();
+      W.fetch = realFetch;
+      W.WebSocket = RealWebSocket;
+    }
+  });
+
+  await test('Replace is explicit for a real local board and performs no contaminating PUT', async () => {
+    await reset();
+    W.addTask({ title: 'Keep local only if combined' });
+    await sleep(250);
+    const candidate = await candidateBoard('Linked replacement');
+    const realFetch = W.fetch;
+    const RealWebSocket = W.WebSocket;
+    let puts = 0;
+    try {
+      W.WebSocket = class { constructor() { throw new Error('socket unavailable in test'); } };
+      W.fetch = async (_url, opts = {}) => {
+        if (opts.method === 'GET') return jsonResponse(candidate.head);
+        if (opts.method === 'PUT') { puts++; return jsonResponse({ ver: 3 }); }
+        throw new Error(`unexpected ${opts.method}`);
+      };
+      await W.inspectCandidate(candidate.secret);
+      await sleep(30);
+      eq(D.querySelector('#sync-state-title').textContent, 'This device already has a board');
+      eq(D.activeElement, D.querySelector('#sync-state-title'), 'the choice heading receives focus');
+      assert(D.querySelector('#sync-linked-signature').textContent.includes('1 card'), 'the choice identifies the linked board');
+      D.querySelector('#sync-replace').click();
+      await sleep(100);
+      assert(colOf('Linked replacement'), 'the linked board won');
+      eq(colOf('Keep local only if combined'), null, 'local work was removed here');
+      eq(puts, 0, 'nothing from the local board was uploaded');
+      eq(D.querySelector('#sync-stop-label').textContent, 'Disconnect this device');
+      assert(D.querySelector('#sync-stop-desc').textContent.includes('Other devices continue'), 'disconnect explains its scope');
+      assert(D.querySelector('#sync-del-desc').textContent.includes('Each device keeps'), 'global deletion explains that copies survive');
+      eq(D.activeElement, D.querySelector('#sync-url'), 'connected state keeps focus inside the sheet');
+
+      D.querySelector('#sync-del').click();
+      await sleep(30);
+      eq(D.activeElement, D.querySelector('#sync-state-title'), 'the end-all confirmation heading receives focus');
+      D.querySelector('#sync-end-confirm').click();
+      await sleep(60);
+      eq(D.activeElement, D.querySelector('#sync-url'), 'a failed end-all attempt returns focus to connected sync');
+    } finally {
+      W.closeSync();
+      W.syncStopped();
+      W.fetch = realFetch;
+      W.WebSocket = RealWebSocket;
+    }
+  });
+
+  await test('Combine keeps both boards and uploads the union to every linked device', async () => {
+    await reset();
+    W.addTask({ title: 'Local half' });
+    await sleep(250);
+    const candidate = await candidateBoard('Remote half');
+    const realFetch = W.fetch;
+    const RealWebSocket = W.WebSocket;
+    let landed = null;
+    try {
+      W.WebSocket = class { constructor() { throw new Error('socket unavailable in test'); } };
+      W.fetch = async (_url, opts = {}) => {
+        if (opts.method === 'GET') return jsonResponse(candidate.head);
+        if (opts.method === 'PUT') {
+          landed = await W.BoardCore.unseal(candidate.keys.key, JSON.parse(opts.body).env);
+          return jsonResponse({ ver: 3 });
+        }
+        throw new Error(`unexpected ${opts.method}`);
+      };
+      await W.inspectCandidate(candidate.secret);
+      D.querySelector('#sync-combine').click();
+      await sleep(300);
+      assert(colOf('Local half') && colOf('Remote half'), 'both sides are visible locally');
+      assert(landed, 'the combined board was uploaded');
+      assert(landed.tasks.some(t => t.title === 'Local half'), 'the upload contains local work');
+      assert(landed.tasks.some(t => t.title === 'Remote half'), 'the upload contains linked work');
+    } finally {
+      W.closeSync();
+      W.syncStopped();
+      W.fetch = realFetch;
+      W.WebSocket = RealWebSocket;
+    }
+  });
+
+  await test('candidate failure or cancellation leaves the local board and relationship untouched', async () => {
+    await reset();
+    W.addTask({ title: 'Must survive candidate' });
+    await sleep(250);
+    const candidate = await candidateBoard('Never applied');
+    const before = W.BoardCore.canon(W.__board.state);
+    const realFetch = W.fetch;
+    let release;
+    try {
+      W.fetch = () => new Promise(resolve => { release = resolve; });
+      const attempt = W.inspectCandidate(candidate.secret);
+      while (!release) await sleep(5);
+      W.closeSync();
+      release(jsonResponse(candidate.head));
+      await attempt;
+      await sleep(30);
+      eq(W.BoardCore.canon(W.__board.state), before, 'a late validated response was inert');
+      eq(W.__board.sync, null, 'Cancel did not create a relationship');
+
+      W.fetch = async () => new W.Response(null, { status: 404 });
+      await W.inspectCandidate(candidate.secret);
+      eq(W.BoardCore.canon(W.__board.state), before, 'a dead link also preserved the board');
+      eq(D.querySelector('#sync-state-title').textContent, 'This sync link no longer works');
+    } finally {
+      W.closeSync();
+      W.fetch = realFetch;
+    }
+  });
+
+  await test('a higher content generation replaces stale tabs; a higher binding still merges their drafts', async () => {
+    await reset();
+    W.addTask({ title: 'Old lineage' });
+    await sleep(250);
+    const stale = JSON.parse(JSON.stringify(W.__board.state));
+    const replacement = JSON.parse(JSON.stringify(stale));
+    replacement.tasks = replacement.tasks.filter(t => t.title !== 'Old lineage');
+    replacement.tasks.push({
+      id: W.BoardCore.uid(), title: 'New lineage', notes: '', projectId: null,
+      session: '', flag: false, columnId: replacement.columns[0].id, order: 0,
+      createdAt: Date.now(), updatedAt: Date.now(), mt: Date.now(),
+    });
+    replacement._contentGen = { at: Date.now() + 1000, id: 'replacement' };
+    W.applyExternal(JSON.stringify(replacement));
+    assert(colOf('New lineage'), 'the intentional replacement arrived');
+    eq(colOf('Old lineage'), null, 'old-lineage content did not merge back');
+    W.applyExternal(JSON.stringify(stale));
+    assert(colOf('New lineage'), 'a lower-generation write was ignored');
+    eq(colOf('Old lineage'), null, 'the stale tab still could not resurrect its board');
+
+    const localDraft = W.addTask({ title: 'Draft in second tab' });
+    await sleep(250);
+    const combined = JSON.parse(JSON.stringify(W.__board.state));
+    combined.tasks = combined.tasks.filter(t => t.id !== localDraft.id);
+    combined.tasks.push({
+      id: W.BoardCore.uid(), title: 'Combined elsewhere', notes: '', projectId: null,
+      session: '', flag: false, columnId: combined.columns[0].id, order: 1,
+      createdAt: Date.now(), updatedAt: Date.now(), mt: Date.now(),
+    });
+    combined._bindingGen = { at: Date.now() + 2000, id: 'new-binding' };
+    W.applyExternal(JSON.stringify(combined));
+    assert(colOf('Draft in second tab'), 'equal content lineage kept the other tab draft');
+    assert(colOf('Combined elsewhere'), 'the new binding content arrived too');
+    eq(W.__board.bindingGen.id, 'new-binding', 'the newer relationship owns the merged board');
+  });
+
+  await test('a late response from old sync X cannot mutate replacement sync Y', async () => {
+    await reset();
+    W.addTask({ title: 'X local work' });
+    await sleep(250);
+    const x = W.BoardCore.randomSecret();
+    const y = await candidateBoard('Y board');
+    const realFetch = W.fetch;
+    const RealWebSocket = W.WebSocket;
+    let releaseX;
+    try {
+      W.WebSocket = class { constructor() { throw new Error('socket unavailable in test'); } };
+      W.fetch = async (_url, opts = {}) => {
+        if (opts.method === 'PUT') return new Promise(resolve => { releaseX = resolve; });
+        if (opts.method === 'GET') return jsonResponse(y.head);
+        throw new Error(`unexpected ${opts.method}`);
+      };
+      W.__board.sync = { secret: x, ver: 0 };
+      const oldPush = W.push();
+      while (!releaseX) await sleep(5);
+      W.syncStopped();
+      await W.inspectCandidate(y.secret);
+      D.querySelector('#sync-replace').click();
+      releaseX(jsonResponse({ ver: 99 }));
+      await oldPush;
+      await sleep(40);
+      eq(W.__board.sync.secret, y.secret, 'Y remained the active relationship');
+      eq(W.__board.sync.ver, 2, 'X could not overwrite Y\'s version');
+      eq(JSON.parse(W.localStorage.getItem('board.sync.test')).secret, y.secret, 'persisted config still names Y');
+      assert(colOf('Y board'), 'Y content stayed installed');
+
+      W.localStorage.setItem('board.sync.test', JSON.stringify({
+        secret: x, ver: 99, _bindingGen: { at: 0, id: '' },
+      }));
+      W.reconcileStoredSync();
+      eq(W.__board.sync.secret, y.secret, 'a stale X config could not disconnect winning Y');
+      eq(JSON.parse(W.localStorage.getItem('board.sync.test')).secret, y.secret, 'Y re-persisted its winning config');
+    } finally {
+      W.closeSync();
+      W.syncStopped();
+      W.fetch = realFetch;
+      W.WebSocket = RealWebSocket;
+    }
+  });
+
+  await test('startup stays safely off when board and sync config bindings do not match', async () => {
+    await reset();
+    const stored = JSON.parse(JSON.stringify(W.__board.state));
+    stored._bindingGen = { at: Date.now() + 1000, id: 'winning-board' };
+    W.localStorage.setItem('board.v2.test', JSON.stringify(stored));
+    W.localStorage.setItem('board.sync.test', JSON.stringify({
+      secret: W.BoardCore.randomSecret(), ver: 4,
+      _bindingGen: { at: stored._bindingGen.at - 1, id: 'stale-config' },
+    }));
+    await reload();
+    eq(W.__board.sync, null, 'the stale relationship engine did not start');
+    eq(W.__board.bindingGen.id, 'winning-board', 'the board commit record remained authoritative');
+    W.localStorage.removeItem('board.sync.test');
   });
 
   await test('sync stays inert without a secret — no config key, engine off', async () => {

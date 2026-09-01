@@ -61,7 +61,7 @@ The modal shows the route (`from → to`) precisely because the export does not:
 
 ### Sync: the rules that keep a merge from eating work
 
-`merge(local, remote)` in `core.js` is pure and unit-tested; the client loop in `app.js` is what has to be careful. Four things will silently lose data if changed carelessly:
+`merge(local, remote)` in `core.js` is pure and unit-tested; the client loop in `app.js` is what has to be careful. These rules will silently lose data if changed carelessly:
 
 **Clocks are wound in exactly one place.** `stampChanges` diffs the state being saved against the last-saved state (`lastStamped`) and stamps what changed. Never add a `touch()` at a mutation site — the diff is what makes every path correct without one, `undo()` included (restoring a snapshot is a change, so what undo brings back is stamped *now* and beats the remote copy it is undoing). Stamps are logical, not wall-clock: always past `clockMax`, so a device with a wrong clock cannot win forever.
 
@@ -71,9 +71,13 @@ The modal shows the route (`from → to`) precisely because the export does not:
 
 **`merge` is for two boards, and only two boards.** It reads whole-board meaning into both arguments — an empty `columns: []` used to win the order vector and sort the real stages by id, moving the done line. So the push floor is unioned directly (`unionFloor`), never merged, and an empty list can no longer win an order. For the same reason the name dedupe only collapses a genuine cross-board coincidence: one id known *only* to each side. Two stages named "Done" on one board are legal and must both survive.
 
-**Joining a board is not the same as syncing with it.** Adopting a pairing link passes `preferOrder: 'remote'` so the joined board keeps its stage order and therefore its done stage; the flag is held until that adoption's first push lands so a 409 retry keeps it too.
+**Joining is an explicit relationship decision.** One namespace follows at most one remote. A link for Y is blocked while X is active; the user must Disconnect and reopen it. A pristine starter adopts Y directly. A real unsynced board chooses Replace (install Y without uploading the old local board) or Combine (merge, with `preferOrder: 'remote'`, then push the union). Candidate fetch/decrypt/validation never borrows the active sync globals and a candidate-attempt id makes late results inert.
 
-**Every apply is a merge, never a replace, and never mid-interaction.** That holds for remote pulls *and* for the cross-tab `storage` event (this tab may hold edits still inside its save debounce). `syncBusy()` is the shared barrier: drags, composer, open editor, inline stage/project rename, report date edit — each settles by calling `flushExternal()`. The editor is the sharp one: its `draft` is a clone from open time, so applying underneath it lets the following save clobber the remote edit. And the `floor` — events and tombstones known to be on the relay — is unioned into every push, so no snapshot write (an import, an undo) can shrink the server's log. While sync is on, Import merges.
+**Remote applies merge; intentional local replacements carry a content generation.** Remote pulls and ordinary same-tab-lineage `storage` writes merge, never mid-interaction. Replace, pristine adoption, unsynced Import, and Import Undo advance `_contentGen`: a higher generation replaces, an equal one merges, and a lower stale write is rejected and the winner re-persisted. A separate `_bindingGen` advances on every relationship transition, including Combine, and the sync config may run only while its generation matches the board. Keeping the two separate is load-bearing: Combine must stop X while still merging an unsaved draft from another tab. `syncBusy()` is the shared render barrier, but a higher binding suspends the old engine immediately. The editor is the sharp one: its `draft` is a clone from open time, so applying underneath it lets the following save clobber the remote edit.
+
+**Async sync work belongs to one immutable session.** Push, pull, watch, retry, and DELETE capture the relationship epoch/secret/binding and re-check them after every await before touching state, version, status, keys, floor, config, or rendering. Disconnect, loss, deletion, cross-tab rebinding, and Join invalidate that epoch first. The board is persisted before the matching sync config, and both storage listeners plus startup enforce the binding match, so a crash or event-order reversal fails safely off rather than pushing Y's content to X.
+
+**The floor never shrinks.** Events and tombstones known to be on the relay are unioned into every push, so no snapshot write (an import, an undo) can truncate the server's history. While sync is on, Import merges.
 
 **Transport retry and destructive deletion are different.** Failed pushes/pulls own one bounded retry timer even if the WebSocket still looks live. Delete-from-server never retries itself and never forgets the secret until the relay confirms `204` or `410`; otherwise the user must be able to try again with the same capability.
 
@@ -86,7 +90,7 @@ The modal shows the route (`from → to`) precisely because the export does not:
 - **The board archives; only the archive deletes.** Nothing on the board is one click from gone; the single irreversible action lives in the archive behind a two-step confirm.
 - **Closing a text surface = saving.** `closeComposer()` commits any typed text as a card, and closing the editor — including clicking outside it — calls `saveEditor()`. Only a deliberate gesture discards: Esc, or the editor's ✕. The editor used to do the opposite and destroy the draft silently, with no undo, because `undo()` restores board state and a draft was never in state.
 - **Damaged boards keep their event log** — the log is the only copy of the history (see migration tests). Sync obeys this too: merge unions events and never drops one, and the push floor stops a snapshot from truncating the relay's copy.
-- **Sync is opt-in and reversible from either end.** Stop syncing forgets this device's key (Undo toast — the secret may exist nowhere else); Delete from server is the armed two-step, and the relay answers 410 forever after so a stale device cannot recreate a wiped board.
+- **Sync is opt-in and reversible from either end.** Disconnect this device forgets this device's key (Undo toast — the secret may exist nowhere else) but keeps its local board and leaves other devices connected. End sync on all devices uses a real confirmation; relay `410` makes stale devices stop without deleting any device's local board.
 
 ### Touch, and the three responsive axes
 

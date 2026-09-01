@@ -1,7 +1,8 @@
 # Sync — the same board on another device
 
 How device sync works, and why it is shaped this way. Companion to
-`design-brief.md`, which explains the board itself.
+`design-brief.md`, which explains the board itself. The reviewed interaction
+and transition contract for joining lives in `sync-joining.md`.
 
 The promise the board started with was "there is no server to send it to."
 Sync qualifies that promise rather than abandoning it: there is now a server,
@@ -171,14 +172,13 @@ GET    /v1/board/watch  → WebSocket; every accepted write broadcasts { ver }
   *merges*. The floor is emphatically **not** a board: it carries no stages,
   projects or cards, so it is unioned directly and never put through `merge`,
   which reads whole-board meaning into whatever it is handed.
-- **Joining is not the same as syncing.** When a pairing link is adopted, the
-  board being *joined* keeps its stage and project order regardless of clocks
-  (`preferOrder: 'remote'`, held until that adoption's first push lands, so a
-  409 retry keeps it too). Scanning a link means joining an existing board,
-  not bringing your layout to it — and since the last column is the done
-  stage, the alternative lets a phone's default stages redefine what the
-  joined board calls finished. Stages the joined board does not know still
-  arrive before its last column.
+- **Joining is explicit.** A pristine starter adopts the linked board directly.
+  A real local board chooses Replace (install the linked snapshot without
+  uploading the old local board) or Combine (merge and upload the union).
+  Combine uses `preferOrder: 'remote'`, held through its first push, so the
+  linked board keeps its done stage even through a 409 retry. A namespace
+  already following X blocks a Y link; Disconnect and reopening Y is the
+  deliberate boundary between the two relationships.
 - **One interaction barrier.** A remote change is fetched immediately but
   applied only when the screen is safe: never during a card, stage or project
   drag, an open composer, an open editor, an inline stage rename, or a report
@@ -186,9 +186,18 @@ GET    /v1/board/watch  → WebSocket; every accepted write broadcasts { ver }
   most: its draft is a clone taken at open time, so applying underneath it
   would let the save that follows clobber the remote edit — or silently drop
   the draft if the remote deleted that card.
-- **Same-machine tabs** need no network: a `storage` event carries one tab's
-  save to the others, and it is *merged*, not adopted, because this tab may
-  hold edits still inside its own save debounce.
+- **Same-machine tabs** need no network for ordinary edits: a `storage` event
+  carries one tab's save to the others and equal content generations merge, so
+  an edit still inside another tab's debounce survives. Intentional
+  replacements advance a local-only content generation and reject stale
+  pre-replacement writes. Relationship changes advance a separate binding
+  generation; the active engine stops immediately and may run only while the
+  board and sync config carry the same binding.
+- **Async results are session-bound.** Every push, pull, watch callback, retry,
+  and DELETE captures the active relationship epoch and verifies it after each
+  asynchronous boundary. A late answer from X is inert after Disconnect or
+  joining Y. Candidate inspection owns a separate attempt id, so Cancel or a
+  newer link also makes a late candidate inert.
 
 ## The surface
 
@@ -202,25 +211,30 @@ object asking the user to supervise something built to heal itself, and the
 board already *is* the display — cards arriving is what working sync looks
 like.
 
-One sheet, four states:
+One sheet owns the whole relationship without becoming a wizard:
 
-- **off** — the pitch, and Enable sync.
-- **on** — the QR on the left, the pairing link and its warning on the right,
-  the status in the footer, and two exits.
-- **adopting** — shown synchronously when a `#sync=` link is opened, so the
-  first-run demo card never flashes and vanishes behind it.
-- **failed** — explains a dead link, or offers Try again when the network was
-  the problem.
+- **off** — Start syncing this board, plus Join with a sync link for
+  desktop-to-desktop pairing;
+- **checking** — validates and decrypts a candidate without changing the
+  current board;
+- **choose** — a real local board sees concrete card/stage signatures and
+  explicitly selects Replace or Combine;
+- **blocked** — a Y link cannot disturb an active X relationship and directs
+  the user to Disconnect first;
+- **on** — QR/link, status, and clearly scoped local/global exits;
+- **failed** — permanent failure preserves the board; transport failure offers
+  Retry;
+- **end confirmation** — a real confirmation for ending sync everywhere.
 
 **The QR is graphite on white in both themes**, on its own plate that nothing
 dims. It is read by a camera, not by a reader, and a themed or tinted code
-fails on a large share of camera apps. It is also the only *safe* way to move
-the link: typing 43 base64 characters is not real, and messaging it to
-yourself puts the board's password in a third-party log forever — six pixels
-under a sentence telling you not to. That is why the encoder is vendored, and
-why it loads on demand: a quarter of the app's JavaScript should not be in the
-cold start of a feature most boards never turn on. If it fails to load, the
-link stands alone; the QR is never load-bearing.
+fails on a large share of camera apps. For two computers, the off state has a
+labeled paste field accepting the full link or raw secret; typing 43
+base64url characters is never required. The capability warning stays beside
+the shared link because copying it through a third party exposes the board to
+that party. The encoder remains vendored and loads on demand: a quarter of the
+app's JavaScript should not be in the cold start of a feature most boards never
+turn on. If it fails to load, the link remains fully usable.
 
 **Status is machine voice, and reports outbound only.** `live · 14:02` means
 the socket is genuinely open and a change elsewhere will arrive unasked;
@@ -234,15 +248,14 @@ is the explanation: a card that moved elsewhere glides, one that arrived gets
 the same entrance a locally created card gets. A marker would also imply
 attribution, and there is no identity here — the other device is you.
 
-**The two exits are different weights.** *Stop syncing* forgets this device's
-key; the board stays whole and local and other devices carry on. Nothing is
-lost, so it takes an Undo toast rather than a confirm — but the secret may
-exist nowhere else, which is why it gets one. *Delete from server* ends sync
-everywhere, so it takes the archive's armed two-step and offers no Undo,
-because undoing it means a network write that can itself fail. It also forgets
-the local secret, or this device's push loop would immediately recreate what
-was just deleted. A failed DELETE keeps the secret and sync enabled; only a
-confirmed `204`/`410` is allowed to say that the server copy is gone.
+**The two exits name their scope and consequence.** *Disconnect this device*
+forgets the key here; the board stays local and other devices continue
+syncing. Nothing is lost, so it takes an Undo toast rather than a confirm — but
+the secret may exist nowhere else, which is why it gets one. *End sync on all
+devices…* deletes the relay copy and opens a real inline confirmation. Every
+device keeps its current local board, but none updates another and the old
+link stops working. A failed DELETE keeps the secret and sync enabled; only a
+confirmed `204`/`410` is allowed to claim the relationship ended.
 
 ## Known limits
 

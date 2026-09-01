@@ -130,14 +130,35 @@
 </aside>
 
 <!-- sync: the same board on another device -->
-<section class="sheet" id="sync" hidden role="dialog" aria-modal="true" aria-label="Sync">
+<section class="sheet" id="sync" hidden role="dialog" aria-modal="true" aria-labelledby="syncTitle">
   <header class="panel-head">
     <h2 id="syncTitle">Sync</h2>
     <button class="icon" data-close></button>
   </header>
 
   <div class="sheet-body">
-    <p class="sync-say" id="sync-say"></p>
+    <h3 class="sync-state-title" id="sync-state-title" tabindex="-1"></h3>
+    <p class="sync-say" id="sync-say" aria-live="polite"></p>
+
+    <form class="sync-join" id="sync-join" hidden>
+      <label for="sync-join-input" id="sync-join-label">Paste sync link</label>
+      <div class="sync-join-line">
+        <input id="sync-join-input" type="text" spellcheck="false" autocomplete="off">
+        <button class="primary" id="sync-join-go" type="submit">Continue</button>
+      </div>
+    </form>
+
+    <div class="sync-choice" id="sync-choice" hidden>
+      <button class="sync-option" id="sync-replace" aria-describedby="sync-replace-desc">
+        <span class="sync-option-top"><strong id="sync-replace-label"></strong><span id="sync-linked-signature"></span></span>
+        <span id="sync-replace-desc"></span>
+      </button>
+      <button class="sync-option secondary" id="sync-combine" aria-describedby="sync-combine-desc">
+        <span class="sync-option-top"><strong id="sync-combine-label"></strong><span id="sync-local-signature"></span></span>
+        <span id="sync-combine-desc"></span>
+      </button>
+      <button class="text-action" id="sync-export" type="button"></button>
+    </div>
 
     <div class="sync-pair" id="sync-pair" hidden>
       <div class="qr" id="sync-qr"></div>
@@ -150,15 +171,28 @@
         <p class="sync-warn" id="sync-warn"></p>
       </div>
     </div>
+
+    <div class="sync-actions" id="sync-actions" hidden>
+      <button class="sync-action" id="sync-stop">
+        <strong id="sync-stop-label"></strong>
+        <span id="sync-stop-desc"></span>
+      </button>
+      <button class="sync-action danger" id="sync-del">
+        <strong id="sync-del-label"></strong>
+        <span id="sync-del-desc"></span>
+      </button>
+    </div>
   </div>
 
   <footer class="sheet-foot">
     <span class="count" id="sync-status" role="status"></span>
     <span class="grow"></span>
-    <button class="ghost" id="sync-stop" hidden>Stop syncing</button>
-    <button class="ghost danger" id="sync-del" hidden>Delete from server</button>
+    <button class="ghost" id="sync-view" hidden>View current sync</button>
+    <button class="ghost" id="sync-cancel" hidden>Cancel</button>
+    <button class="ghost danger" id="sync-end-confirm" hidden>End sync</button>
     <button class="primary" id="sync-retry" hidden>Try again</button>
-    <button class="primary" id="sync-enable">Enable sync</button>
+    <button class="ghost" id="sync-join-open" hidden>Join with a sync link</button>
+    <button class="primary" id="sync-enable">Start syncing this board</button>
   </footer>
 </section>
 

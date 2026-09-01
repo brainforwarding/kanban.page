@@ -74,12 +74,14 @@ deleted once it's empty.
 
 ## Good to know
 
-- **Your phone too, with no account.** **⋯ → Sync devices** shows a QR code;
-  scan it and that device has the same board, updating live as you work. There
-  is no sign-up and no password: the link *is* the key, so anyone you give it
-  to can read and edit the board — and the server only ever holds bytes it
-  cannot decrypt. Sync is off until you turn it on, and every synced device
-  still keeps a complete local copy. See [docs/sync.md](docs/sync.md).
+- **Your phone and other computers too, with no account.** **⋯ → Sync
+  devices** shows a QR code and link. Scan it on a phone or paste it through
+  **Join with a sync link** on another computer. A device with an existing
+  local board explicitly chooses Replace or Combine; a device already synced
+  elsewhere must disconnect first. The link *is* the key, so anyone you give
+  it to can read and edit the board — while the server only holds bytes it
+  cannot decrypt. Every device still keeps a complete local copy. See
+  [docs/sync.md](docs/sync.md).
 - **Move a board with `⋯ → Export backup`**, then `Import backup`. Worth doing
   occasionally regardless: a cleared browser is a cleared board.
 - **Nothing is one click from gone.** The board archives; only the archive
@@ -100,7 +102,7 @@ They cover what is easy to get silently wrong: calendar dates across DST,
 Monday–Sunday boundaries across month and year ends, report aggregation,
 markdown output, storage migration, and the sync merge — clocks, tombstones,
 and three replicas converging. Then open `tests/dom.test.html` in Chrome for
-40 interaction tests — they drive the real app in an iframe and report
+50 interaction tests — they drive the real app in an iframe and report
 pass/fail in the page title, against a `?ns=test` board that never touches
 your data.
 
