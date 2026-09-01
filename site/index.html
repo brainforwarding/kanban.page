@@ -490,14 +490,11 @@ h1,h2,h3,p{margin:0}
 }
 /* height:auto is load-bearing — the width/height attributes reserve the box
    against layout shift, and without it they also override the scaled height. */
-.devshot{width:100%;max-width:378px;height:auto;margin:0 auto;display:block;
-  filter:drop-shadow(0 34px 60px rgba(0,0,0,.45))}
+.devshot{width:100%;max-width:378px;height:auto;margin:0 auto;display:block}
 .claims{display:grid;gap:24px}
 .claim dt{font:500 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
   color:var(--accent);margin-bottom:7px}
 .claim dd{margin:0;color:var(--muted);font-size:15px;max-width:44ch}
-.caution{margin-top:30px;padding-top:22px;border-top:1px solid var(--line);
-  font:400 13px/1.5 var(--ui);color:var(--faint);max-width:52ch}
 
 /* ── reference block ─────────────────────────────────── */
 
@@ -832,8 +829,8 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
 <section class="sec">
   <div class="wrap">
     <p class="eyebrow rv-print">Devices</p>
-    <h2 class="head rv" style="--d:.1s">Your phone too. <em>Still no account.</em></h2>
-    <p class="sub rv" style="--d:.19s">Open <b>⋯ &rarr; Sync devices</b> and scan the QR. The board follows you &mdash; and the server never sees a word of it.</p>
+    <h2 class="head rv" style="--d:.1s">Syncs across devices, <em>including mobile</em>.</h2>
+    <p class="sub rv" style="--d:.19s">Open <b>⋯ &rarr; Sync devices</b> and scan the QR. No account, and the server never sees a word of it.</p>
 
     <div class="devices rv-panel" style="--d:.3s">
       <picture>
@@ -842,8 +839,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
              alt="The board running on a phone" loading="lazy" decoding="async">
       </picture>
 
-      <div>
-        <dl class="claims">
+      <dl class="claims">
         <div class="claim">
           <dt>No account</dt>
           <dd>A secret inside a link &mdash; no email, no password, nothing to sign up for.</dd>
@@ -852,13 +848,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
           <dt>End-to-end encrypted</dt>
           <dd>The relay stores sealed bytes. Not your titles, not your notes, not even your stage names.</dd>
         </div>
-        <div class="claim">
-          <dt>Still yours</dt>
-          <dd>Every device keeps a complete local copy, and still opens offline.</dd>
-        </div>
-        </dl>
-        <p class="caution">Anyone with the link can read and edit the board. Treat it like a password &mdash; and turn sync off from either end, whenever you want.</p>
-      </div>
+      </dl>
     </div>
   </div>
 </section>
