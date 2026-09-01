@@ -186,12 +186,12 @@ function flushPendingSave() {
 let pendingExternal = null;
 
 function applyExternal(rawJson) {
-  if (drag || composerCol !== null) { pendingExternal = rawJson; return; }
+  if (syncBusy()) { pendingExternal = rawJson; return; }
   let raw = null;
   try { raw = JSON.parse(rawJson); } catch (err) { return; }
   if (!raw) return;
   const external = C.migrate(raw);
-  C.stampChanges(lastStamped, state); // pending local edits get their clocks first
+  C.stampChanges(lastStamped, state, undefined, external.tombstones); // settle drafts past a fetched delete
   state = C.merge(state, external);
   lastStamped = clone(state);
   render();
@@ -237,6 +237,7 @@ let syncKeys = null;    // { token, key } derived from the secret, cached
 let syncStatus = 'off'; // off | ok | syncing | offline | error
 let syncedAt = null;    // epoch ms of the last successful exchange
 let remoteHead = '';    // serialized syncable known to equal the server head
+let rejectedPayload = ''; // exact payload rejected as too large; retry only after change
 // The floor: events and tombstones known to have reached the relay. Unioned
 // into every push, so no snapshot PUT — an import, an undo — can ever shrink
 // the log or drop a tombstone from the server (the log only grows).
@@ -247,6 +248,7 @@ let pendingRemote = null;
 // order wins rather than whichever clock happens to be higher.
 let joiningOrder = false;
 let pushTimer = null, pushing = false, pullQueued = false, pulling = false;
+let syncRetryTimer = null, syncRetryAttempt = 0;
 let watchSock = null, watchRetry = 0;
 let uiDragLock = 0;     // column and project-row drags hold this
 
@@ -287,11 +289,13 @@ function setSyncStatus(s) {
    stale clone — applying under it would let a later save clobber the remote
    edit), an inline stage rename, a project rename, a report date edit.
    Remote payloads are still fetched and queued; they apply on settle. */
-const syncBusy = () => !!drag || uiDragLock > 0 || composerCol !== null || !editor.hidden
-  || !!reportEl.querySelector('input[type="date"]')
+function syncBusy() {
+  return !!drag || uiDragLock > 0 || composerCol !== null || !editor.hidden
+  || (!reportEl.hidden && !!reportEl.querySelector('input[type="date"]'))
   || !!(document.activeElement && (
     document.activeElement.classList.contains('col-name')
-    || document.activeElement.closest('#proj-list')));
+    || (!panel.hidden && document.activeElement.matches('#proj-list input'))));
+}
 
 const syncableStr = st => C.canon(C.syncable(st));
 /** merge(x, x) is a no-op that normalizes ordering — for comparisons only. */
@@ -306,7 +310,7 @@ function applyRemote(remote, ver) {
   if (syncBusy()) { pendingRemote = { remote, ver }; return; }
   sync.ver = ver;
   saveSyncConfig();
-  C.stampChanges(lastStamped, state); // pending local edits keep their clocks
+  C.stampChanges(lastStamped, state, undefined, remote.tombstones); // pending drafts can explicitly restore
   const before = syncableStr(state);
   // While joining a board, its stage order wins — including through a 409
   // retry, which lands back here before the adoption has settled.
@@ -321,14 +325,45 @@ function applyRemote(remote, ver) {
     if (!reportEl.hidden) renderReport(false);
   }
   save(); // persist the union; schedules a push-back only if we knew more
-  setSyncStatus('ok');
+  const current = syncableStr(state);
+  setSyncStatus(current === rejectedPayload && current !== remoteHead ? 'error' : 'ok');
   syncedAt = Date.now();
 }
 
 function schedulePush(ms = 1200) {
   if (!sync) return;
+  if (syncableStr(state) === rejectedPayload) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(() => push(), ms);
+}
+
+function clearSyncRetry(reset = true) {
+  clearTimeout(syncRetryTimer);
+  syncRetryTimer = null;
+  if (reset) syncRetryAttempt = 0;
+}
+
+/** Retry transport failures independently of the WebSocket: an HTTP request
+    can fail while the live socket still looks open. One bounded backoff loop
+    per tab is enough; pull first so a stale writer never blind-writes. */
+function scheduleSyncRetry() {
+  if (!sync || syncRetryTimer) return;
+  const delay = Math.min(30000, 1000 * 2 ** syncRetryAttempt++);
+  syncRetryTimer = setTimeout(() => {
+    syncRetryTimer = null;
+    if (!sync) return;
+    flushExternal();
+    connectWatch();
+    pull();
+  }, delay);
+}
+
+function retrySyncNow() {
+  if (!sync) return;
+  clearSyncRetry(false);
+  flushExternal();
+  connectWatch();
+  pull();
 }
 
 async function push(opts = {}) {
@@ -347,8 +382,10 @@ async function push(opts = {}) {
     state = C.unionFloor(state, floor);
     lastStamped = clone(state);
   }
+  if (syncableStr(state) === rejectedPayload) { setSyncStatus('error'); return; }
   if (syncableStr(state) === remoteHead) {
     joiningOrder = false; // nothing to send: the adoption has settled too
+    clearSyncRetry();
     setSyncStatus('ok');
     return;
   }
@@ -365,8 +402,10 @@ async function push(opts = {}) {
         sync.ver = (await res.json()).ver;
         saveSyncConfig();
         remoteHead = snap;
+        rejectedPayload = '';
         floor = { events: payload.events, tombstones: payload.tombstones };
         joiningOrder = false; // the adoption has settled
+        clearSyncRetry();
         setSyncStatus('ok');
         syncedAt = Date.now();
         if (syncableStr(state) !== snap) schedulePush(300); // edits landed mid-flight
@@ -382,11 +421,18 @@ async function push(opts = {}) {
         continue;
       }
       if (res.status === 410) { syncLost(); return; }
-      if (res.status === 413) { setSyncStatus('error'); return; } // permanent until smaller
+      if (res.status === 413) {
+        rejectedPayload = snap;
+        clearSyncRetry();
+        setSyncStatus('error');
+        return; // permanent until the board changes and schedules a fresh push
+      }
       throw new Error(`relay ${res.status}`);
     }
+    scheduleSyncRetry(); // repeated contention: pull and try again later
   } catch (err) {
-    setSyncStatus('offline'); // wire or relay — either way, retry on the heartbeat
+    setSyncStatus('offline');
+    scheduleSyncRetry();
   } finally {
     pushing = false;
   }
@@ -412,11 +458,21 @@ async function pull() {
       applyRemote(remote, ver);
     } else {
       floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
-      setSyncStatus('ok');
-      if (syncableStr(state) !== remoteHead) schedulePush(300);
+      remoteHead = normalized(remote);
+      const current = syncableStr(state);
+      if (current === remoteHead) {
+        clearSyncRetry();
+        setSyncStatus('ok');
+      } else if (current === rejectedPayload) {
+        setSyncStatus('error'); // focus/pull must not disguise a blocked 413
+      } else {
+        setSyncStatus('ok');
+        schedulePush(300);
+      }
     }
   } catch (err) {
     setSyncStatus('offline');
+    scheduleSyncRetry();
   } finally {
     pulling = false;
     if (pullQueued) { pullQueued = false; pull(); }
@@ -481,12 +537,11 @@ document.addEventListener('visibilitychange', () => {
     flushPendingSave();
     if (syncableStr(state) !== remoteHead) push({ keepalive: true });
   } else {
-    connectWatch();
-    pull();
+    retrySyncNow();
   }
 });
-window.addEventListener('focus', () => { if (sync) { flushExternal(); pull(); } });
-window.addEventListener('online', () => { if (sync) { connectWatch(); pull(); } });
+window.addEventListener('focus', retrySyncNow);
+window.addEventListener('online', retrySyncNow);
 // A tab closed inside the save debounce must not lose its last edit.
 window.addEventListener('pagehide', () => {
   flushPendingSave();
@@ -499,6 +554,7 @@ async function enableSync() {
   sync = { secret: C.randomSecret(), ver: 0 };
   syncKeys = null;
   remoteHead = '';
+  rejectedPayload = '';
   floor = null;
   saveSyncConfig();
   await push();
@@ -511,10 +567,12 @@ async function enableSync() {
 function syncStopped(msg) {
   dropWatch();
   clearTimeout(pushTimer);
+  clearSyncRetry();
   joiningOrder = false;
   sync = null;
   syncKeys = null;
   remoteHead = '';
+  rejectedPayload = '';
   floor = null;
   pendingRemote = null;
   saveSyncConfig();
@@ -531,10 +589,12 @@ let saidSyncLost = false;
 function syncLost() {
   dropWatch();
   clearTimeout(pushTimer);
+  clearSyncRetry();
   joiningOrder = false;
   sync = null;
   syncKeys = null;
   remoteHead = '';
+  rejectedPayload = '';
   floor = null;
   pendingRemote = null;
   saveSyncConfig();
@@ -546,8 +606,15 @@ function syncLost() {
 /** Wipe the relay copy — durable: the slot answers 410 from then on, and
     every synced device sees the broadcast and stops. */
 async function deleteFromServer() {
-  try { await relayFetch('DELETE'); } catch (err) { /* it may already be gone */ }
-  syncStopped(); // the sheet's own handler says what happened
+  try {
+    const res = await relayFetch('DELETE');
+    if (res.status !== 204 && res.status !== 410) throw new Error(`relay ${res.status}`);
+    syncStopped(); // forget the key only after the relay confirms the outcome
+    return true;
+  } catch (err) {
+    setSyncStatus('offline');
+    return false;
+  }
 }
 
 const syncLink = () => {
@@ -580,6 +647,7 @@ async function adoptFromLink(secret) {
   sync = { secret, ver: 0 };
   syncKeys = null;
   remoteHead = '';
+  rejectedPayload = '';
   floor = null;
   try {
     if (C.b64uToBytes(secret).length !== 32) throw Object.assign(new Error('bad secret'), { gone: true });
@@ -919,6 +987,7 @@ function renderBoard() {
       col.name = v || col.name;
       name.textContent = col.name;
       save();
+      flushExternal();
     });
     name.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); name.blur(); }
@@ -1782,7 +1851,11 @@ function renderProjects() {
         <span class="n">${n}</span>
         <button class="icon sm" title="Delete">${ICON.close}</button>`;
 
-      $('input', row).addEventListener('change', e => { p.name = e.target.value.trim() || p.name; save(); render(); renderProjects(); });
+      $('input', row).addEventListener('change', e => {
+        p.name = e.target.value.trim() || p.name;
+        save(); render(); renderProjects();
+        flushExternal();
+      });
       $('.swatch', row).onclick = () => { openSwatch = p.id; renderProjects(); };
       $('.icon', row).onclick = () => {
         snapshot();
@@ -2247,6 +2320,7 @@ $('#sync-stop').onclick = () => {
     sync = was;
     syncKeys = null;
     remoteHead = '';
+    rejectedPayload = '';
     floor = null;
     saveSyncConfig();
     connectWatch();
@@ -2264,7 +2338,12 @@ $('#sync-stop').onclick = () => {
 $('#sync-del').onclick = async () => {
   if (!armed.has('sync-delete')) { arm('sync-delete', renderSync); return; }
   disarm();
-  await deleteFromServer();
+  const deleted = await deleteFromServer();
+  if (!deleted) {
+    renderSync();
+    toast(tr('syncDeleteFailed'), null, 8000);
+    return;
+  }
   syncView = 'off';
   renderSync();
   toast(tr('serverDeleted'));
@@ -2611,6 +2690,7 @@ function closeReport() {
   weeksEl.hidden = true;
   $('#rep-week').setAttribute('aria-expanded', 'false');
   syncScrim();
+  flushExternal();
 }
 
 function lookupTask(taskId) {
@@ -2757,12 +2837,13 @@ function editDay(row, entry) {
     if (settled) return;
     settled = true;
     const day = input.value;
-    if (!day || day === entry.day) { renderReport(false); return; }
+    if (!day || day === entry.day) { renderReport(false); flushExternal(); return; }
 
     const conflict = C.rewriteConflict(state.events, entry, day);
     if (conflict) {
       renderReport(false);
       toast(conflict === 'before' ? 'That is before this card existed' : 'Not a date');
+      flushExternal();
       return;
     }
 
@@ -2777,7 +2858,9 @@ function editDay(row, entry) {
 
   input.addEventListener('change', commit);
   input.addEventListener('blur', () => setTimeout(commit, 60));
-  input.addEventListener('keydown', ev => { if (ev.key === 'Escape') { settled = true; renderReport(false); } });
+  input.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { settled = true; renderReport(false); flushExternal(); }
+  });
 }
 
 function reportMarkdown() {
@@ -2861,6 +2944,15 @@ window.__board = {
   get repWeek() { return repWeek; },
   set repWeek(v) { repWeek = v; },
   get sync() { return sync; },
+  set sync(v) {
+    clearSyncRetry();
+    sync = v;
+    syncKeys = null;
+    remoteHead = '';
+    rejectedPayload = '';
+    floor = null;
+  },
+  get syncStatus() { return syncStatus; },
 };
 
 render();

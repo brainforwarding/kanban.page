@@ -55,17 +55,22 @@ the app calls a `touch()`, so no future feature can forget to. It also means
 any other, so what undo brings back is stamped *now* and beats the remote copy
 it is undoing.
 
-Each task carries **two** stamps:
+Each task carries an aggregate content stamp (`mt`), a placement stamp (`pmt`),
+an existence generation (`existMt`), and additive per-field content stamps
+(`fieldMt`) for title, notes, session, project, flag and archive state. Archive
+time/source are one atomic field. Legacy tasks without `fieldMt` present their
+`mt` as every field's baseline; without `existMt`, their creation time is the
+existence baseline.
 
-- `mt` — content: title, notes, session, project, flag, archive fields.
-- `pmt` — placement: `columnId` and `order`.
-
-They are separate because placement moves constantly and impersonally.
+Content and placement are separate because placement moves constantly and impersonally.
 `addTask` bumps every sibling's `order`; one "Sort by project" rewrites the
 whole board. Under a single whole-row stamp, tidying the desk on the laptop
 would stamp a stale copy of every card and silently eat a title edited on the
-phone. Splitting them also means **a reorder can never resurrect a deleted
-card** — only the content clock argues with a tombstone.
+phone. Per-field stamps also mean a laptop title edit and phone notes edit can
+both survive. Edits to the same field still choose one deterministic winner.
+Splitting placement also means **a reorder can never resurrect a deleted
+card**. The separate existence generation is the only task clock compared with
+a tombstone.
 
 ## merge(local, remote)
 
@@ -73,12 +78,15 @@ Pure, in `core.js`, unit-tested. Never mutates its inputs.
 
 - **Preferences never travel.** Theme, density, filters and `asOf` are
   properties of a device, not of the work. Sync moves work, not taste.
-- **Tasks** merge per row: content by `mt`, placement by `pmt`, independently.
+- **Tasks** merge per field using `fieldMt`, placement by `pmt`, and existence
+  by `existMt`, independently. `mt` remains the aggregate compatibility clock.
 - **Tombstones** (`deleteForever`, and deleting a stage or project) are ids
   and a timestamp, never content — a tombstone must not preserve what someone
-  deliberately destroyed. A tombstone deletes unless the content clock is
-  newer, so an edit or an undo that came after the delete wins and the data
-  survives the conflict.
+  deliberately destroyed. A tombstone suppresses an older existence
+  generation, even when another offline device has newer field edits. Undo, or
+  saving an open draft after its client has fetched the delete, explicitly
+  starts a newer generation and brings the card back. This rule prevents a
+  stale third device from reconstructing pieces of a permanently deleted card.
 - **Stages and projects** merge per item — so two devices adding a stage each
   keep both — while their **order is one atomic vector** under its own clock.
   Order is semantics here: the last column is the done stage, and the weekly
@@ -152,7 +160,8 @@ GET    /v1/board/watch  → WebSocket; every accepted write broadcasts { ver }
 ## The client loop
 
 - **Push** after each debounced save, coalesced ~1.2s. On 409: merge, apply,
-  retry from the new base, at most three times — the next pull converges.
+  retry from the new base, at most three times. Transport failures retry at
+  bounded 1–30s backoff even when the watch socket still appears connected.
 - **Pull** on load, on focus, on becoming visible, on the watch socket's
   signal, and on the 30s fallback.
 - **The floor.** Events and tombstones known to have reached the relay are
@@ -232,7 +241,8 @@ exist nowhere else, which is why it gets one. *Delete from server* ends sync
 everywhere, so it takes the archive's armed two-step and offers no Undo,
 because undoing it means a network write that can itself fail. It also forgets
 the local secret, or this device's push loop would immediately recreate what
-was just deleted.
+was just deleted. A failed DELETE keeps the secret and sync enabled; only a
+confirmed `204`/`410` is allowed to say that the server copy is gone.
 
 ## Known limits
 

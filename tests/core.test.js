@@ -648,6 +648,9 @@ const task = (id, over) => ({
   id, title: id, notes: '', projectId: null, session: '', flag: false,
   columnId: 'c1', order: 0, createdAt: 1000, updatedAt: 1000, ...over,
 });
+const fieldClocks = (at, over = {}) => ({
+  title: at, notes: at, session: at, project: at, flag: at, archive: at, ...over,
+});
 
 test('stampChanges stamps exactly what changed, and only that', () => {
   const prev = board({ tasks: [task('a'), task('b')], columns: cols(['X']), projects: [] });
@@ -709,12 +712,83 @@ test('stampChanges stamps a rewritten event but never an appended one', () => {
   assert.equal(next.events[1].mt, undefined);
 });
 
-test('merge: the newer edit of a task wins whole-row, either way round', () => {
+test('stampChanges advances only the card fields that actually changed', () => {
+  const prev = board({ tasks: [task('t', { mt: 100, pmt: 80, fieldMt: fieldClocks(100) })] });
+  const next = board({ tasks: [task('t', {
+    title: 'renamed', flag: true, mt: 100, pmt: 80, fieldMt: fieldClocks(100),
+  })] });
+  C.stampChanges(prev, next, 500);
+  const changedAt = next.tasks[0].mt;
+  assert.ok(changedAt > 500, 'the logical clock also clears the observed creation time');
+  assert.equal(next.tasks[0].fieldMt.title, changedAt);
+  assert.equal(next.tasks[0].fieldMt.flag, changedAt);
+  assert.equal(next.tasks[0].fieldMt.notes, 100);
+  assert.equal(next.tasks[0].fieldMt.project, 100);
+  assert.equal(next.tasks[0].mt, changedAt, 'the legacy aggregate clock still advances');
+  assert.equal(next.tasks[0].pmt, 80, 'content cannot impersonate placement');
+});
+
+test('the first move of a legacy card freezes its old content clock', () => {
+  const prev = board({ tasks: [task('t')] });
+  const moved = board({ tasks: [task('t', { columnId: 'c2', order: 3, updatedAt: 9000 })] });
+  C.stampChanges(prev, moved, 5000);
+  assert.equal(moved.tasks[0].mt, 1000, 'updatedAt from the move did not advance content');
+  assert.ok(moved.tasks[0].pmt > 9000, 'placement received the new logical stamp');
+
+  const editedElsewhere = board({ tasks: [task('t', { title: 'remote edit', mt: 6000, pmt: 1000 })] });
+  const merged = C.merge(moved, editedElsewhere);
+  assert.equal(merged.tasks[0].title, 'remote edit');
+  assert.equal(merged.tasks[0].columnId, 'c2');
+  assert.equal(merged.tasks[0].order, 3);
+});
+
+test('settling a draft after its fetched delete starts a restore generation', () => {
+  const prev = board({ tasks: [task('t', {
+    mt: 100, pmt: 100, existMt: 100, fieldMt: fieldClocks(100),
+  })] });
+  const next = board({ tasks: [task('t', {
+    title: 'save my draft', mt: 100, pmt: 100, existMt: 100, fieldMt: fieldClocks(100),
+  })] });
+  C.stampChanges(prev, next, 400, { t: 500 });
+  assert.ok(next.tasks[0].existMt > 500);
+  assert.equal(C.merge(next, board({ tombstones: { t: 500 } })).tasks[0].title, 'save my draft');
+});
+
+test('merge: legacy tasks still choose the newer whole-row edit', () => {
   const base = board({ columns: cols(['X']) });
   const a = { ...base, tasks: [task('t', { title: 'from A', mt: 2000, columnId: 'c1' })] };
   const b = { ...base, tasks: [task('t', { title: 'from B', mt: 3000, columnId: 'c1' })] };
   assert.equal(C.merge(a, b).tasks[0].title, 'from B');
   assert.equal(C.merge(b, a).tasks[0].title, 'from B');
+});
+
+test('merge: offline edits to different fields of one card are combined', () => {
+  const a = board({ tasks: [task('t', {
+    title: 'title from laptop', notes: 'old notes', mt: 200, pmt: 100,
+    fieldMt: fieldClocks(100, { title: 200 }), updatedAt: 200,
+  })] });
+  const b = board({ tasks: [task('t', {
+    title: 'old title', notes: 'notes from phone', mt: 300, pmt: 100,
+    fieldMt: fieldClocks(100, { notes: 300 }), updatedAt: 300,
+  })] });
+  for (const merged of [C.merge(a, b), C.merge(b, a)]) {
+    assert.equal(merged.tasks[0].title, 'title from laptop');
+    assert.equal(merged.tasks[0].notes, 'notes from phone');
+    assert.equal(merged.tasks[0].fieldMt.title, 200);
+    assert.equal(merged.tasks[0].fieldMt.notes, 300);
+  }
+  assert.deepEqual(C.syncable(C.merge(a, b)).tasks, C.syncable(C.merge(b, a)).tasks);
+});
+
+test('merge: two offline edits to the same card field have one stable winner', () => {
+  const a = board({ tasks: [task('t', {
+    title: 'older title', mt: 200, fieldMt: fieldClocks(100, { title: 200 }),
+  })] });
+  const b = board({ tasks: [task('t', {
+    title: 'newer title', mt: 300, fieldMt: fieldClocks(100, { title: 300 }),
+  })] });
+  assert.equal(C.merge(a, b).tasks[0].title, 'newer title');
+  assert.equal(C.merge(b, a).tasks[0].title, 'newer title');
 });
 
 test('merge: converges to identical synced state from both directions', () => {
@@ -744,14 +818,15 @@ test('merge: a tombstone deletes the task and survives in the union', () => {
   assert.equal(m.tombstones.gone, 2000);
 });
 
-test('merge: an edit stamped after the delete resurrects the task', () => {
-  // undo restamps what it brings back, so this is also the undo-after-sync path
-  const a = board({ tasks: [task('back', { title: 'edited after delete', mt: 3000 })] });
+test('merge: an explicit restore generation newer than the delete wins', () => {
+  const a = board({ tasks: [task('back', {
+    title: 'restored after delete', mt: 3000, existMt: 3000,
+  })] });
   const b = board({ tombstones: { back: 2000 } });
   const m = C.merge(a, b);
   assert.equal(m.tasks.length, 1);
-  assert.equal(m.tasks[0].title, 'edited after delete');
-  assert.equal(m.tombstones.back, 2000); // kept, inert against the newer mt
+  assert.equal(m.tasks[0].title, 'restored after delete');
+  assert.equal(m.tombstones.back, 2000); // kept, inert against the newer generation
 });
 
 test('merge: prefs never cross — local theme, density and filter survive', () => {
@@ -786,6 +861,49 @@ test('merge: a dangling projectId maps to the winning project of the same name',
     tasks: [task('t', { projectId: 'pb', mt: 60 })],
   });
   assert.equal(C.merge(a, b).tasks[0].projectId, 'pa');
+});
+
+test('merge: a card whose project was deleted elsewhere becomes unassigned', () => {
+  const deleted = board({ projects: [], projectsMt: 500, tombstones: { p: 500 }, tasks: [] });
+  const edited = board({
+    projects: [{ id: 'p', name: 'API', color: '#fff', mt: 100 }],
+    projectsMt: 100,
+    tasks: [task('t', {
+      title: 'edited offline', projectId: 'p', mt: 600,
+      fieldMt: fieldClocks(100, { title: 600 }),
+    })],
+  });
+  const merged = C.merge(deleted, edited);
+  assert.equal(merged.projects.length, 0);
+  assert.equal(merged.tasks[0].title, 'edited offline');
+  assert.equal(merged.tasks[0].projectId, null);
+});
+
+test('merge: an unseen field edit cannot resurrect a permanently deleted card', () => {
+  const edited = board({ tasks: [task('t', {
+    notes: 'saved', mt: 100, existMt: 100, fieldMt: fieldClocks(100, { notes: 900 }),
+  })] });
+  const deleted = board({ tombstones: { t: 500 } });
+  assert.equal(C.merge(edited, deleted).tasks.length, 0);
+  assert.equal(C.merge(deleted, edited).tasks.length, 0);
+});
+
+test('three replicas cannot leak fields from a row suppressed by a tombstone', () => {
+  const beforeDelete = board({ tasks: [task('t', {
+    title: 'deleted title', notes: 'deleted notes', mt: 200, pmt: 900,
+    existMt: 100, fieldMt: fieldClocks(100, { title: 200, notes: 200 }),
+  })] });
+  const deleted = board({ tasks: [], tombstones: { t: 300 } });
+  const resurrected = board({ tasks: [task('t', {
+    title: 'resurrected', notes: 'fresh notes', mt: 400, pmt: 100, existMt: 400,
+    fieldMt: fieldClocks(100, { title: 400, notes: 400 }),
+  })] });
+  const left = C.merge(C.merge(beforeDelete, deleted), resurrected);
+  const right = C.merge(beforeDelete, C.merge(deleted, resurrected));
+  assert.equal(C.canon(C.syncable(left)), C.canon(C.syncable(right)));
+  assert.equal(left.tasks[0].title, 'resurrected');
+  assert.equal(left.tasks[0].notes, 'fresh notes');
+  assert.equal(left.tasks[0].pmt, 100, 'the deleted replica placement stayed deleted too');
 });
 
 test('merge: the event log only grows, and a rewritten day beats an unstamped copy', () => {
@@ -873,7 +991,7 @@ test('merge: a reorder on one device never clobbers a content edit on another', 
 });
 
 test('merge: a reorder never resurrects a deliberately deleted card', () => {
-  // Only the content clock argues with a tombstone. A card deleted on the
+  // Only the existence generation argues with a tombstone. A card deleted on the
   // phone must not come back because the laptop happened to drag a neighbour.
   const a = board({ tasks: [task('gone', { mt: 1000, pmt: 9000 })] }); // stale copy, freshly reordered
   const b = board({ tombstones: { gone: 5000 } });
@@ -953,6 +1071,28 @@ test('merge is idempotent, commutative and associative over the synced subset', 
   assert.equal(left.events.length, 3);
   assert.equal(left.tasks.length, 4); // t1, t2, t3, shared
   assert.equal(left.tasks.find(t => t.id === 'shared').title, 'from 3'); // highest content clock
+});
+
+test('three offline devices converge while keeping their disjoint card fields', () => {
+  const laptop = board({ tasks: [task('shared', {
+    title: 'from laptop', notes: 'base', flag: false, mt: 200,
+    fieldMt: fieldClocks(100, { title: 200 }),
+  })] });
+  const phone = board({ tasks: [task('shared', {
+    title: 'base', notes: 'from phone', flag: false, mt: 300,
+    fieldMt: fieldClocks(100, { notes: 300 }),
+  })] });
+  const secondLaptop = board({ tasks: [task('shared', {
+    title: 'base', notes: 'base', flag: true, mt: 400,
+    fieldMt: fieldClocks(100, { flag: 400 }),
+  })] });
+
+  const left = C.merge(C.merge(laptop, phone), secondLaptop);
+  const right = C.merge(laptop, C.merge(phone, secondLaptop));
+  assert.equal(C.canon(C.syncable(left)), C.canon(C.syncable(right)));
+  assert.equal(left.tasks[0].title, 'from laptop');
+  assert.equal(left.tasks[0].notes, 'from phone');
+  assert.equal(left.tasks[0].flag, true);
 });
 
 test('merge: the winner of a same-name stage collision keeps the tasks of both', () => {
@@ -1095,8 +1235,11 @@ test('the floor union leaves stages, order and the done stage untouched', () => 
   assert.equal(out.tombstones.longGone, 4, 'and carries the server tombstone');
 });
 
-test('the floor union still applies a server tombstone, unless we edited since', () => {
-  const st = board({ tasks: [task('doomed', { mt: 100 }), task('saved', { mt: 900 })] });
+test('the floor union applies a tombstone unless a newer restore generation exists', () => {
+  const st = board({ tasks: [
+    task('doomed', { mt: 100, existMt: 100 }),
+    task('saved', { mt: 900, existMt: 900 }),
+  ] });
   const out = C.unionFloor(st, { events: [], tombstones: { doomed: 500, saved: 500 } });
   assert.deepEqual(out.tasks.map(t => t.id), ['saved'], 'older than the tombstone goes');
 });

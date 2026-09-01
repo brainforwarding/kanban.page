@@ -93,14 +93,14 @@ deleted once it's empty.
 ## Develop
 
 ```bash
-node --test tests/core.test.js     # 105 unit tests, no dependencies
+node --test tests/core.test.js     # 114 unit tests, no dependencies
 ```
 
 They cover what is easy to get silently wrong: calendar dates across DST,
 Monday–Sunday boundaries across month and year ends, report aggregation,
 markdown output, storage migration, and the sync merge — clocks, tombstones,
 and three replicas converging. Then open `tests/dom.test.html` in Chrome for
-36 interaction tests — they drive the real app in an iframe and report
+40 interaction tests — they drive the real app in an iframe and report
 pass/fail in the page title, against a `?ns=test` board that never touches
 your data.
 

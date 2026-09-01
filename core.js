@@ -363,12 +363,13 @@ const BoardCore = (() => {
      fast clock cannot make its old edits win forever — the other side's
      next stamp jumps past it, so causally later edits always dominate.
 
-     Tasks carry TWO clocks: `mt` for content (title, notes, session, flag,
-     project, archive fields) and `pmt` for placement (columnId, order).
-     Without the split, addTask bumping every sibling's order — or one
-     "Sort by project" — would stamp whole rows and let a stale device's
-     copy beat a real content edit made elsewhere. Placement never fights
-     content, and placement never resurrects a deleted card. */
+     Tasks carry per-field content clocks (`fieldMt`), an aggregate content
+     clock (`mt`) for compatibility, a placement clock (`pmt`), and an
+     existence generation (`existMt`) for delete/restore decisions.
+     Without the split, addTask bumping every sibling's order — or one "Sort
+     by project" — would let a stale device's copy beat a real content edit
+     made elsewhere. Placement never fights content, and placement never
+     resurrects a deleted card. */
 
   /** Canonical serialization: object keys sorted, so two structurally equal
       values compare equal regardless of construction history. All tie-breaks
@@ -385,14 +386,59 @@ const BoardCore = (() => {
   }
   const canon = x => JSON.stringify(canonValue(x));
 
-  /** Content clock of a task. `updatedAt` seeds boards from before sync. */
-  const mtOf = t => t.mt ?? t.updatedAt ?? t.createdAt ?? 0;
+  /** Aggregate content clock of a task. `updatedAt` seeds boards from before sync. */
+  const aggregateMtOf = t => t.mt ?? t.updatedAt ?? t.createdAt ?? 0;
+  const mtOf = t => Math.max(
+    aggregateMtOf(t),
+    ...Object.values(t.fieldMt || {}),
+  );
   /** Placement clock of a task. */
   const pmtOf = t => t.pmt ?? mtOf(t);
+  /** Existence generation: only creation / explicit restore advances this. */
+  const existMtOf = t => t.existMt ?? t.createdAt ?? mtOf(t);
 
-  const taskContent = t => {
-    const { mt, pmt, columnId, order, ...content } = t;
-    return content;
+  // Mutable task content merges by field group. Archive fields are one group:
+  // half an archive operation (a timestamp without its source stage, or vice
+  // versa) is not a meaningful state. `mt` remains the aggregate content clock
+  // for old clients and unknown future fields.
+  const TASK_FIELDS = [
+    ['title', ['title']],
+    ['notes', ['notes']],
+    ['session', ['session']],
+    ['project', ['projectId']],
+    ['flag', ['flag']],
+    ['archive', ['archivedAt', 'archivedFrom']],
+  ];
+  const taskFieldValue = (t, name, keys) => keys.length === 1
+    ? t[keys[0]]
+    : Object.fromEntries(keys.map(key => [key, t[key] ?? null]));
+  const setTaskFieldValue = (t, keys, value) => {
+    if (keys.length === 1) { t[keys[0]] = value; return; }
+    for (const key of keys) {
+      const next = value && value[key];
+      if (next == null) delete t[key]; else t[key] = next;
+    }
+  };
+  const fieldMtOf = (t, name) => {
+    const aggregate = aggregateMtOf(t);
+    if (!t.fieldMt) return aggregate;
+    const explicitMax = Math.max(0, ...Object.values(t.fieldMt));
+    // An older app preserves the unknown fieldMt object but only advances mt.
+    // Treat that as its legacy whole-row edit; mixed versions may still lose a
+    // concurrent field, but the old client's actual edit is never ignored.
+    if (aggregate > explicitMax) return aggregate;
+    return t.fieldMt[name] != null ? t.fieldMt[name] : aggregate;
+  };
+  const materializeFieldMt = t => ({
+    ...Object.fromEntries(TASK_FIELDS.map(([name]) => [name, fieldMtOf(t, name)])),
+    ...(t.fieldMt && t.fieldMt._extra != null ? { _extra: t.fieldMt._extra } : {}),
+  });
+  const taskExtraContent = t => {
+    const {
+      id, title, notes, session, projectId, flag, archivedAt, archivedFrom,
+      createdAt, updatedAt, mt, pmt, existMt, fieldMt, columnId, order, ...extra
+    } = t;
+    return extra;
   };
   const taskPlacement = t => ({ columnId: t.columnId, order: t.order });
   const itemContent = c => {
@@ -404,7 +450,9 @@ const BoardCore = (() => {
       strictly exceed. */
   function clockMax(st) {
     let m = 0;
-    for (const t of st.tasks || []) m = Math.max(m, mtOf(t), pmtOf(t));
+    for (const t of st.tasks || []) {
+      m = Math.max(m, mtOf(t), pmtOf(t), existMtOf(t), ...Object.values(t.fieldMt || {}));
+    }
     for (const e of st.events || []) m = Math.max(m, e.mt || 0);
     for (const c of st.columns || []) m = Math.max(m, c.mt || 0);
     for (const p of st.projects || []) m = Math.max(m, p.mt || 0);
@@ -419,15 +467,59 @@ const BoardCore = (() => {
    * needs a clock to win a collision. Any stamp clears the first-run `seed`
    * marker: a board the user has touched is no longer safe to replace.
    */
-  function stampChanges(prev, next, now = Date.now()) {
-    const clock = Math.max(now, clockMax(prev) + 1, clockMax(next) + 1);
+  function stampChanges(prev, next, now = Date.now(), observedTombstones = null) {
+    const observedMax = Math.max(0, ...Object.values(observedTombstones || {}));
+    const clock = Math.max(now, clockMax(prev) + 1, clockMax(next) + 1, observedMax + 1);
     let stamped = false;
 
     const oldTasks = new Map((prev.tasks || []).map(t => [t.id, t]));
     for (const t of next.tasks || []) {
       const before = oldTasks.get(t.id);
-      if (!before || canon(taskContent(before)) !== canon(taskContent(t))) { t.mt = clock; stamped = true; }
-      if (!before || canon(taskPlacement(before)) !== canon(taskPlacement(t))) { t.pmt = clock; stamped = true; }
+      if (!before) {
+        t.fieldMt = Object.fromEntries(TASK_FIELDS.map(([name]) => [name, clock]));
+        t.mt = clock;
+        t.pmt = clock;
+        t.existMt = clock;
+        stamped = true;
+        continue;
+      }
+
+      const changedFields = TASK_FIELDS.filter(([name, keys]) =>
+        canon(taskFieldValue(before, name, keys)) !== canon(taskFieldValue(t, name, keys)));
+      const extraChanged = canon(taskExtraContent(before)) !== canon(taskExtraContent(t));
+      const placementChanged = canon(taskPlacement(before)) !== canon(taskPlacement(t));
+      const deleteAt = Math.max((next.tombstones && next.tombstones[t.id]) || 0,
+        (observedTombstones && observedTombstones[t.id]) || 0);
+
+      // Legacy rows used `mt` as the fallback placement clock. Freeze that
+      // baseline before a content edit advances mt, or a title edit would look
+      // like a move. The inverse protects content when an old row is first
+      // moved and `updatedAt` advances for the age label.
+      if ((changedFields.length || extraChanged || placementChanged) && t.pmt == null) {
+        t.pmt = pmtOf(before);
+      }
+      if ((changedFields.length || extraChanged) && deleteAt >= existMtOf(before)) {
+        // A draft settled after its remote delete was already fetched is an
+        // explicit restore. This is still stamped here—not at the UI mutation
+        // site—so every interaction path keeps the same clock discipline.
+        t.existMt = clock;
+      } else if ((changedFields.length || extraChanged || placementChanged) && t.existMt == null) {
+        t.existMt = existMtOf(before);
+      }
+      if (placementChanged && t.mt == null) t.mt = mtOf(before);
+
+      if (changedFields.length) {
+        const fieldMt = materializeFieldMt(before);
+        for (const [name] of changedFields) fieldMt[name] = clock;
+        t.fieldMt = fieldMt;
+        t.mt = clock;
+        stamped = true;
+      } else if (extraChanged) {
+        t.fieldMt = { ...materializeFieldMt(before), _extra: clock };
+        t.mt = clock;
+        stamped = true;
+      }
+      if (placementChanged) { t.pmt = clock; stamped = true; }
     }
 
     const oldEvents = new Map((prev.events || []).map(e => [e.id, e]));
@@ -502,10 +594,12 @@ const BoardCore = (() => {
    *   stage added elsewhere sort last and silently redefine what the weekly
    *   report calls finished. A cosmetic divergence that self-heals beats a
    *   semantic one that does not.
-   * - tasks: content by `mt`, placement by `pmt`, independently. A
-   *   tombstone deletes unless the CONTENT clock is newer — an edit made
-   *   after (or stamped after) the delete wins and the data survives;
-   *   a mere reorder never resurrects anything.
+   * - tasks: known content by `fieldMt`, aggregate/legacy content by `mt`,
+   *   placement by `pmt`, and existence by `existMt`, independently. A
+   *   tombstone deletes an older existence generation. Ordinary edits and
+   *   moves do not change that generation; an explicit restore after an
+   *   observed delete does. This prevents stale fields from leaking back
+   *   through a third replica while still making Undo/save-draft restorative.
    * - events: union by id — the log only ever grows.
    */
   function merge(local, remote, opts = {}) {
@@ -564,7 +658,9 @@ const BoardCore = (() => {
         if (cm > hm || (cm === hm && canon(c) > canon(held))) byId.set(c.id, c);
       }
       let items = [...byId.values()].filter(c => !(tombstones[c.id] != null && (c.mt || 0) <= tombstones[c.id]));
-      if (!items.length) items = [...byId.values()]; // never merge a board into zero stages
+      // A board must retain a stage, but an empty project list is perfectly
+      // valid. Sharing this guard used to resurrect the final deleted project.
+      if (!items.length && insertBeforeLast) items = [...byId.values()];
 
       // Two boards with separate histories both have an "Inbox" under
       // different ids: keep one, remember the alias so tasks follow it.
@@ -631,22 +727,51 @@ const BoardCore = (() => {
     const ofB = new Map((b.tasks || []).map(t => [t.id, t]));
     const tasks = [];
     for (const id of new Set([...ofA.keys(), ...ofB.keys()])) {
-      const x = ofA.get(id), y = ofB.get(id);
-      const pick = (clockOf) => !x ? y : !y ? x
+      let x = ofA.get(id), y = ofB.get(id);
+      // Creation/explicit restore starts a new generation. Older generations
+      // never donate fields or placement to it, and a tombstone removes every
+      // generation it has observed. This is what keeps delete/restore
+      // associative across three or more replicas without retaining deleted
+      // card content anywhere else.
+      const generation = Math.max(x ? existMtOf(x) : 0, y ? existMtOf(y) : 0);
+      if (x && existMtOf(x) < generation) x = null;
+      if (y && existMtOf(y) < generation) y = null;
+      if (tombstones[id] != null && generation <= tombstones[id]) continue;
+      if (!x && !y) continue;
+      const pick = (clockOf, valueOf = row => row) => !x ? y : !y ? x
         : clockOf(x) !== clockOf(y) ? (clockOf(x) > clockOf(y) ? x : y)
-        : (canon(x) >= canon(y) ? x : y);
+        : (canon(valueOf(x)) >= canon(valueOf(y)) ? x : y);
       const cw = pick(mtOf);   // content winner
-      const pw = pick(pmtOf);  // placement winner
-      // Only the CONTENT clock argues with a tombstone: a reorder elsewhere
-      // must never resurrect a deliberately deleted card, while an edit (or
-      // an undo, which restamps what it brings back) does.
-      if (tombstones[id] != null && mtOf(cw) <= tombstones[id]) continue;
-      const row = deep(cw);
-      if (pw !== cw) {
+      const pw = pick(pmtOf, taskPlacement);  // placement winner
+      let row = deep(cw);
+
+      // New clients merge known mutable fields independently. A legacy row
+      // without fieldMt presents its aggregate mt as every field's clock, so
+      // mixed-version boards remain deterministic and backwards compatible.
+      if (x && y && (x.fieldMt || y.fieldMt)) {
+        const fieldMt = {};
+        for (const [name, keys] of TASK_FIELDS) {
+          const xm = fieldMtOf(x, name), ym = fieldMtOf(y, name);
+          const xv = taskFieldValue(x, name, keys);
+          const yv = taskFieldValue(y, name, keys);
+          const winner = xm !== ym ? (xm > ym ? xv : yv)
+            : canon(xv) >= canon(yv) ? xv : yv;
+          setTaskFieldValue(row, keys, winner);
+          fieldMt[name] = Math.max(xm, ym);
+        }
+        row.fieldMt = fieldMt;
+        const extraMt = Math.max((x.fieldMt && x.fieldMt._extra) || 0,
+          (y.fieldMt && y.fieldMt._extra) || 0);
+        if (extraMt) row.fieldMt._extra = extraMt;
+        row.mt = Math.max(mtOf(x), mtOf(y), ...Object.values(fieldMt));
+        row.updatedAt = Math.max(x.updatedAt || 0, y.updatedAt || 0) || row.updatedAt;
+      }
+      if (pmtOf(pw) > pmtOf(cw) || canon(taskPlacement(pw)) !== canon(taskPlacement(cw))) {
         row.columnId = pw.columnId;
         row.order = pw.order;
         row.pmt = pmtOf(pw);
       }
+      if ((x && x.existMt != null) || (y && y.existMt != null)) row.existMt = generation;
       tasks.push(row);
     }
 
@@ -667,7 +792,7 @@ const BoardCore = (() => {
       if (t.projectId && projs.alias.has(t.projectId)) t.projectId = projs.alias.get(t.projectId);
       if (t.projectId && !projIds.has(t.projectId)) {
         const mapped = projByName.get(projNameOf.get(t.projectId));
-        if (mapped) t.projectId = mapped;
+        t.projectId = mapped || null;
       }
     }
 
@@ -724,9 +849,9 @@ const BoardCore = (() => {
 
     return {
       ...st,
-      // a tombstone the server holds still deletes, unless this device has
-      // touched the card since — the same contest merge() runs
-      tasks: (st.tasks || []).filter(t => !(tombstones[t.id] != null && mtOf(t) <= tombstones[t.id])),
+      // A tombstone removes an observed existence generation. Only an explicit
+      // restore/new generation can outvote it; an unseen stale edit cannot.
+      tasks: (st.tasks || []).filter(t => !(tombstones[t.id] != null && existMtOf(t) <= tombstones[t.id])),
       tombstones: Object.fromEntries(Object.entries(tombstones).sort(([x], [y]) => x < y ? -1 : 1)),
       events: [...events.values()]
         .sort((x, y) => (x.at || 0) - (y.at || 0) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)),
@@ -894,7 +1019,7 @@ const BoardCore = (() => {
     weeksWithActivity, aggregateWeek, groupByProject, summaryLine, toMarkdown, reportFilename,
     shouldLogMove, isDay, makeEvent, rewriteConflict, rewriteDay,
     reindex, applyOrder, sortByProject, defaultBoard, migrate,
-    mtOf, pmtOf, clockMax, canon, stampChanges, syncable, merge, unionFloor,
+    mtOf, pmtOf, existMtOf, clockMax, canon, stampChanges, syncable, merge, unionFloor,
     randomSecret, deriveSync, seal, unseal, bytesToB64u, b64uToBytes,
   };
 })();

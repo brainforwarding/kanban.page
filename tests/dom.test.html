@@ -659,6 +659,127 @@ frame.addEventListener('load', async function run() {
     eq(W.__board.state.tasks.length, 3, 'demo + local + remote — the merge lost nothing');
   });
 
+  await test('a tab write waits for an open editor, so its draft cannot disappear', async () => {
+    await reset();
+    const local = W.addTask({ title: 'Draft survives' });
+    await sleep(250);
+    W.openEditor(local.id);
+    D.querySelector('#f-title').value = 'Draft saved after delete';
+
+    const copy = JSON.parse(W.localStorage.getItem('board.v2.test'));
+    copy.tombstones = copy.tombstones || {};
+    copy.tombstones[local.id] = W.BoardCore.clockMax(copy) + 1;
+    copy.tasks = copy.tasks.filter(t => t.id !== local.id);
+    localStorage.setItem('board.v2.test', JSON.stringify(copy));
+    await sleep(120);
+
+    assert(W.__board.state.tasks.some(t => t.id === local.id), 'the external delete was held');
+    eq(D.querySelector('#f-title').value, 'Draft saved after delete', 'the draft stayed on screen');
+    W.saveEditor();
+    await sleep(250);
+    assert(colOf('Draft saved after delete'), 'saving settled the draft before the delete merged');
+  });
+
+  await test('a stale upload merges a 409 head and retries with both devices’ work', async () => {
+    await reset();
+    const C = W.BoardCore;
+    const remoteBase = JSON.parse(JSON.stringify(W.__board.state));
+    const remote = JSON.parse(JSON.stringify(remoteBase));
+    const now = Date.now();
+    remote.tasks.push({
+      id: C.uid(), title: 'Remote offline card', notes: '', projectId: null,
+      session: '', flag: false, columnId: remote.columns[0].id, order: 0,
+      createdAt: now, updatedAt: now,
+    });
+    C.stampChanges(remoteBase, remote, now);
+
+    W.addTask({ title: 'Local offline card' });
+    await sleep(250);
+
+    const realFetch = W.fetch;
+    const secret = C.randomSecret();
+    const { key } = await C.deriveSync(secret);
+    const remoteEnv = await C.seal(key, C.syncable(remote));
+    let puts = 0;
+    let landed = null;
+    try {
+      W.fetch = async (_url, opts) => {
+        if (opts.method !== 'PUT') throw new Error(`unexpected ${opts.method}`);
+        puts++;
+        if (puts === 1) {
+          return new W.Response(JSON.stringify({ ver: 2, env: remoteEnv }), {
+            status: 409, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        const body = JSON.parse(opts.body);
+        landed = await C.unseal(key, body.env);
+        return new W.Response(JSON.stringify({ ver: 3 }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      };
+      W.__board.sync = { secret, ver: 0 };
+      await W.push();
+      eq(puts, 2, 'the stale writer retried once');
+      assert(W.__board.state.tasks.some(t => t.title === 'Local offline card'), 'local work survived');
+      assert(W.__board.state.tasks.some(t => t.title === 'Remote offline card'), 'remote work arrived');
+      assert(landed.tasks.some(t => t.title === 'Local offline card'), 'the union was uploaded');
+      assert(landed.tasks.some(t => t.title === 'Remote offline card'), 'the relay received both sides');
+    } finally {
+      W.syncStopped();
+      W.fetch = realFetch;
+    }
+  });
+
+  await test('a transient failed upload retries without waiting for focus or another edit', async () => {
+    await reset();
+    const realFetch = W.fetch;
+    const RealWebSocket = W.WebSocket;
+    let puts = 0;
+    try {
+      W.WebSocket = class { constructor() { throw new Error('socket unavailable in test'); } };
+      W.fetch = async (_url, opts) => {
+        if (opts.method === 'GET') return new W.Response(null, { status: 404 });
+        if (opts.method === 'PUT') {
+          puts++;
+          if (puts === 1) throw new Error('temporary network failure');
+          return new W.Response(JSON.stringify({ ver: 1 }), {
+            status: 200, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        throw new Error(`unexpected ${opts.method}`);
+      };
+      W.__board.sync = { secret: W.BoardCore.randomSecret(), ver: 0 };
+      await W.push();
+      eq(W.__board.syncStatus, 'offline', 'first failure is visible');
+      await sleep(1800);
+      eq(puts, 2, 'the queued retry uploaded once more');
+      eq(W.__board.sync.ver, 1, 'the retry reached the relay head');
+      eq(W.__board.syncStatus, 'ok', 'the retry settled sync');
+    } finally {
+      W.syncStopped();
+      W.fetch = realFetch;
+      W.WebSocket = RealWebSocket;
+    }
+  });
+
+  await test('server deletion forgets the key only after confirmation', async () => {
+    await reset();
+    const realFetch = W.fetch;
+    try {
+      W.__board.sync = { secret: W.BoardCore.randomSecret(), ver: 1 };
+      W.fetch = async () => { throw new Error('offline'); };
+      eq(await W.deleteFromServer(), false, 'the failed delete reports failure');
+      assert(W.__board.sync, 'the pairing secret was kept for an explicit retry');
+
+      W.fetch = async () => new W.Response(null, { status: 204 });
+      eq(await W.deleteFromServer(), true, 'the confirmed delete reports success');
+      eq(W.__board.sync, null, 'only confirmation forgets the key');
+    } finally {
+      W.syncStopped();
+      W.fetch = realFetch;
+    }
+  });
+
   await test('sync stays inert without a secret — no config key, engine off', async () => {
     eq(W.localStorage.getItem('board.sync.test'), null, 'no sync config was created');
   });
