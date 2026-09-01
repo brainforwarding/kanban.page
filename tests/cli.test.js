@@ -343,3 +343,11 @@ test('a sync link is never echoed back by the parser', () => {
   // and a bad one yields null rather than an error carrying the input
   assert.equal(boardsMod.parseEntry('https://kanban.page/app/#sync=short'), null);
 });
+
+test('a board cannot be named over another board\'s backup slot', () => {
+  // `replace` parks the displaced secret at <name>.previous. Since keychainSet
+  // passes -U, a board actually called "work.previous" would have its live
+  // secret silently overwritten the next time "work" was replaced.
+  assert.throws(() => boardsMod.addBoard('work.previous', 'A'.repeat(43)), /reserved/);
+  assert.equal(boardsMod.previousOf('work'), 'work.previous');
+});

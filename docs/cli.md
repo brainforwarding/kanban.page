@@ -340,6 +340,10 @@ so a redirect cannot move the token to another host.
   the config *and* the keychain — `keychainSet` passes `-U`, so a lost or
   corrupt `config.json` would otherwise let an add clobber a live secret
   (`readConfig` swallows a parse error and returns an empty map).
+- Names ending in `.previous` are **reserved**: that is where `replace` parks a
+  displaced secret, so a board by that name would share a slot with another
+  board's backup and the next `replace` would overwrite a live capability —
+  silently, because `keychainSet` passes `-U`.
 - Replacing a board's secret is a separate `board replace`, and the displaced
   secret is kept in **one** slot per board, `<name>.previous`. One slot, not one
   per replace: a timestamped backup left keychain items nothing tracked, listed

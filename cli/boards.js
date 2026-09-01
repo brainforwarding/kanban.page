@@ -117,6 +117,12 @@ function putSecret(name, secret, { plaintextOk = false } = {}) {
 
 function addBoard(name, entry, { relay = OFFICIAL, plaintextOk = false } = {}) {
   const cfg = readConfig();
+  // `.previous` is where replace parks a displaced secret, so a board by that
+  // name would share a keychain slot with another board's backup and the next
+  // `replace` would overwrite a live capability. -U made that silent.
+  if (/\.previous$/.test(name)) {
+    throw new BoardError('usage', 'names ending in ".previous" are reserved — that is where a replaced secret is kept. Pick another name.');
+  }
   // Never overwrite: the secret being replaced may exist nowhere else. Both
   // stores are checked, because keychainSet now passes -U and would happily
   // clobber a surviving item if config.json were lost or corrupt (readConfig
