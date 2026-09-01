@@ -491,6 +491,18 @@ h1,h2,h3,p{margin:0}
 /* height:auto is load-bearing — the width/height attributes reserve the box
    against layout shift, and without it they also override the scaled height. */
 .devshot{width:100%;max-width:378px;height:auto;margin:0 auto;display:block}
+
+/* The panel rises as one block; the phone breaks from it and lands a beat
+   later. It is the only object on the page rather than type, so it carries a
+   little more travel, a little scale (it arrives forward, not just up) and a
+   degree of rotation that unwinds — the way something gets set down. Driven
+   off the panel's own .in rather than a second observer, so the stagger is
+   fixed instead of depending on which element trips the threshold first. */
+.devshot{opacity:0;transform:translateY(26px) scale(.965) rotate(1deg)}
+.devices.in .devshot{
+  opacity:1;transform:none;
+  transition:opacity .6s var(--ease) .42s, transform .95s var(--ease) .42s;
+}
 .claims{display:grid;gap:24px}
 .claim dt{font:500 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
   color:var(--accent);margin-bottom:7px}
@@ -657,7 +669,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
   *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important}
   .ln > span{transform:none !important}
   .cur{opacity:1 !important}
-  .rv,.rv-panel{opacity:1 !important;transform:none !important}
+  .rv,.rv-panel,.devshot{opacity:1 !important;transform:none !important}
   .rv-print{opacity:1 !important;clip-path:none !important}
 }
 </style>
