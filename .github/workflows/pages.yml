@@ -52,6 +52,10 @@ jobs:
         run: |
           cp site/index.html _site/index.html
           cp site/_og/og-kanban-page.png _site/og.png
+          # Only what the page actually references — site/_media also holds
+          # unused source clips, and nothing under site/ is staged by default.
+          mkdir -p _site/media
+          cp site/_media/sync-phone.webp site/_media/sync-phone.png _site/media/
           cp CNAME _site/CNAME
       - uses: actions/upload-pages-artifact@v3
         with:
