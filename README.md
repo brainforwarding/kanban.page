@@ -1,8 +1,8 @@
 # kanban.page
 
 A personal kanban that keeps your work organised by stage and by project.
-Free, works offline, no account. The board lives in your browser — there is no
-server to send it to.
+Free, works offline, no account. The board lives in your browser; turn on sync
+and it reaches your other devices through a server that cannot read it.
 
 **[Open the board →](https://kanban.page/)**
 
@@ -34,6 +34,12 @@ routes, no counts:
 
 Which stage counts as done is **position, not a name**: the rightmost one. So
 drag a new stage to where it belongs rather than renaming stages to fake it.
+
+**Your phone too, with no account.** **⋯ → Sync devices** shows a QR code and a
+link — scan it, and it's the same board on both. The link *is* the key, so
+anyone you give it to can read and edit the board, while the server only ever
+holds bytes it cannot decrypt. Every device keeps a complete local copy, and
+sync is reversible from either end. See [docs/sync.md](docs/sync.md).
 
 **Your agent can change the board itself.** ~4,000 lines of vanilla HTML/CSS/JS,
 no build step, no dependencies, and a `CLAUDE.md` that lands an agent oriented
@@ -74,14 +80,9 @@ deleted once it's empty.
 
 ## Good to know
 
-- **Your phone and other computers too, with no account.** **⋯ → Sync
-  devices** shows a QR code and link. Scan it on a phone or paste it through
-  **Join with a sync link** on another computer. A device with an existing
-  local board explicitly chooses Replace or Combine; a device already synced
-  elsewhere must disconnect first. The link *is* the key, so anyone you give
-  it to can read and edit the board — while the server only holds bytes it
-  cannot decrypt. Every device still keeps a complete local copy. See
-  [docs/sync.md](docs/sync.md).
+- **Joining is explicit.** Paste a link through **Join with a sync link** on
+  another computer. A device with an existing local board chooses Replace or
+  Combine; a device already synced elsewhere must disconnect first.
 - **Move a board with `⋯ → Export backup`**, then `Import backup`. Worth doing
   occasionally regardless: a cleared browser is a cleared board.
 - **Nothing is one click from gone.** The board archives; only the archive

@@ -480,6 +480,25 @@ h1,h2,h3,p{margin:0}
   transition:color .2s var(--ease), border-color .2s var(--ease)}
 .ask a:hover{color:var(--accent);border-color:var(--accent-dim)}
 
+/* ── devices ─────────────────────────────────────────── */
+
+/* The phone carries the proof, so it leads on wide screens and the claims sit
+   beside it. The render is a cut-out, so it needs no plate in either theme. */
+.devices{
+  display:grid;grid-template-columns:.82fr 1.18fr;
+  gap:clamp(30px,5vw,68px);align-items:center;margin-top:44px;
+}
+/* height:auto is load-bearing — the width/height attributes reserve the box
+   against layout shift, and without it they also override the scaled height. */
+.devshot{width:100%;max-width:378px;height:auto;margin:0 auto;display:block;
+  filter:drop-shadow(0 34px 60px rgba(0,0,0,.45))}
+.claims{display:grid;gap:24px}
+.claim dt{font:500 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+  color:var(--accent);margin-bottom:7px}
+.claim dd{margin:0;color:var(--muted);font-size:15px;max-width:44ch}
+.caution{margin-top:30px;padding-top:22px;border-top:1px solid var(--line);
+  font:400 13px/1.5 var(--ui);color:var(--faint);max-width:52ch}
+
 /* ── reference block ─────────────────────────────────── */
 
 /* It comes after the ask, so it must not look like another chapter: a hairline,
@@ -597,7 +616,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
 /* ── responsive ──────────────────────────────────────── */
 
 @media (max-width:900px){
-  .split,.repwrap{grid-template-columns:1fr}
+  .split,.repwrap,.devices{grid-template-columns:1fr}
   .board{grid-template-columns:repeat(2,minmax(0,1fr));min-height:0}
   .board.aslist .card{width:calc((100% - 16px) / 2)}
 }
@@ -674,7 +693,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
       <a class="btn primary" href="https://kanban.page/app/">Open the board</a>
       <a class="btn ghost" href="https://github.com/brainforwarding/kanban.page">Read the source</a>
     </div>
-    <p class="fineprint" id="fine">free &nbsp;·&nbsp; MIT &nbsp;·&nbsp; <span>installs to your dock</span> &nbsp;·&nbsp; <span>works offline</span></p>
+    <p class="fineprint" id="fine">free &nbsp;·&nbsp; MIT &nbsp;·&nbsp; <span>installs to your dock</span> &nbsp;·&nbsp; <span>works offline</span> &nbsp;·&nbsp; <span>syncs to your phone</span></p>
   </div>
 
   <div class="wrap stage">
@@ -809,6 +828,41 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
   </div>
 </section>
 
+<!-- ── devices ────────────────────────────────────────── -->
+<section class="sec">
+  <div class="wrap">
+    <p class="eyebrow rv-print">Devices</p>
+    <h2 class="head rv" style="--d:.1s">Your phone too. <em>Still no account.</em></h2>
+    <p class="sub rv" style="--d:.19s">Open <b>⋯ &rarr; Sync devices</b> and scan the QR. The board follows you &mdash; and the server never sees a word of it.</p>
+
+    <div class="devices rv-panel" style="--d:.3s">
+      <picture>
+        <source srcset="_media/sync-phone.webp" type="image/webp">
+        <img class="devshot" src="_media/sync-phone.png" width="900" height="1350"
+             alt="The board running on a phone" loading="lazy" decoding="async">
+      </picture>
+
+      <div>
+        <dl class="claims">
+        <div class="claim">
+          <dt>No account</dt>
+          <dd>A secret inside a link &mdash; no email, no password, nothing to sign up for.</dd>
+        </div>
+        <div class="claim">
+          <dt>End-to-end encrypted</dt>
+          <dd>The relay stores sealed bytes. Not your titles, not your notes, not even your stage names.</dd>
+        </div>
+        <div class="claim">
+          <dt>Still yours</dt>
+          <dd>Every device keeps a complete local copy, and still opens offline.</dd>
+        </div>
+        </dl>
+        <p class="caution">Anyone with the link can read and edit the board. Treat it like a password &mdash; and turn sync off from either end, whenever you want.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ── fork: the page takes a breath before the ask ──── -->
 <section class="sec">
   <div class="wrap">
@@ -854,7 +908,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
 
     <div class="faq rv-panel" style="--d:.3s">
       <details class="qa"><summary>Where is my data?<i></i></summary>
-        <div class="qa-body"><p><span>In your browser, on this machine. There is no server to send it to.</span></p></div>
+        <div class="qa-body"><p><span>In your browser, on this machine. Turn on sync and an encrypted copy also sits on a relay &mdash; one that cannot read it.</span></p></div>
       </details>
       <details class="qa"><summary>Is it really free?<i></i></summary>
         <div class="qa-body"><p><span>Yes. MIT licensed, and there is no paid version &mdash; nothing here will ever sit behind a payment. If it earns a place in your week, you can <a href="https://buymeacoffee.com/sebasonearth" target="_blank" rel="noopener">buy me a coffee</a>.</span></p></div>
@@ -863,13 +917,13 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
         <div class="qa-body"><p><span>Yes, after the first visit. Install it to your dock and it opens like an app.</span></p></div>
       </details>
       <details class="qa"><summary>Can my board disappear?<i></i></summary>
-        <div class="qa-body"><p><span>Only if something clears your browser&rsquo;s site data. In Chrome, open <code>chrome://settings/content/siteData</code> and add this site under <em>Allowed to save data on your device</em>. Back up any time with <code>⋯ → Export backup</code>.</span></p></div>
+        <div class="qa-body"><p><span>Only if something clears your browser&rsquo;s site data. In Chrome, open <code>chrome://settings/content/siteData</code> and add this site under <em>Allowed to save data on your device</em>. Back up any time with <code>⋯ → Export backup</code>, or turn on sync so a second device holds a copy too.</span></p></div>
       </details>
       <details class="qa"><summary>Can I change it?<i></i></summary>
         <div class="qa-body"><p><span>Fork it. ~4,000 lines of vanilla JS, no build step, no dependencies.</span></p></div>
       </details>
       <details class="qa"><summary>Does it work on my phone?<i></i></summary>
-        <div class="qa-body"><p><span>Yes. But each browser keeps its own copy and there is no sync, so a phone starts empty. Move one across with <code>⋯ → Export backup</code>, then <code>Import backup</code>.</span></p></div>
+        <div class="qa-body"><p><span>Yes. Open <code>⋯ → Sync devices</code> on the board you already have, scan the QR with your phone, and it&rsquo;s the same board on both &mdash; no account. You can also move one across with <code>⋯ → Export backup</code>, then <code>Import backup</code>.</span></p></div>
       </details>
     </div>
 
