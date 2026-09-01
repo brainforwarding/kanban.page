@@ -30,7 +30,7 @@ jobs:
           mkdir -p _site/app
           rsync -a --exclude .git --exclude _site --exclude site \
                 --exclude docs --exclude tests --exclude .github \
-                --exclude relay \
+                --exclude relay --exclude cli --exclude package.json \
                 --exclude CNAME --exclude README.md --exclude CLAUDE.md \
                 ./ _site/app/
           # Version the shell on what the shell CONTAINS, not on the commit.

@@ -574,6 +574,39 @@ const BoardCore = (() => {
   });
 
   /**
+   * Is this decrypted payload a board this client may write back?
+   *
+   * `unseal` only decrypts and JSON.parses — it promises nothing about shape,
+   * and `syncable` hard-codes v:2 and copies only the fields it knows. So a
+   * client that merged a NEWER board and pushed it would silently drop every
+   * field a later version added. The browser has always refused a future `v`
+   * (see applyRemote); this is that check, named and shared, so the app and any
+   * headless client cannot drift on what "valid" means.
+   *
+   * Returns null when acceptable, else a short reason string.
+   */
+  const SYNC_V = 2;
+  function validateSyncable(x) {
+    if (!x || typeof x !== 'object' || Array.isArray(x)) return 'not an object';
+    if ((x.v || SYNC_V) > SYNC_V) return `schema v${x.v} is newer than this client (v${SYNC_V})`;
+    if (!Array.isArray(x.columns) || !x.columns.length) return 'no columns';
+    for (const c of x.columns) {
+      if (!c || typeof c.id !== 'string' || !c.id) return 'a column has no id';
+    }
+    for (const [key, val] of [['projects', x.projects], ['tasks', x.tasks], ['events', x.events]]) {
+      if (val !== undefined && !Array.isArray(val)) return `${key} is not an array`;
+    }
+    for (const t of x.tasks || []) {
+      if (!t || typeof t.id !== 'string' || !t.id) return 'a task has no id';
+    }
+    if (x.tombstones !== undefined
+      && (!x.tombstones || typeof x.tombstones !== 'object' || Array.isArray(x.tombstones))) {
+      return 'tombstones is not an object';
+    }
+    return null;
+  }
+
+  /**
    * merge(local, remote[, opts]) → a fresh board. Local preferences pass through
    * untouched; the synced subset merges by the rules in docs/sync-spec.md:
    *
@@ -1019,7 +1052,7 @@ const BoardCore = (() => {
     weeksWithActivity, aggregateWeek, groupByProject, summaryLine, toMarkdown, reportFilename,
     shouldLogMove, isDay, makeEvent, rewriteConflict, rewriteDay,
     reindex, applyOrder, sortByProject, defaultBoard, migrate,
-    mtOf, pmtOf, existMtOf, clockMax, canon, stampChanges, syncable, merge, unionFloor,
+    mtOf, pmtOf, existMtOf, clockMax, canon, stampChanges, syncable, validateSyncable, SYNC_V, merge, unionFloor,
     randomSecret, deriveSync, seal, unseal, bytesToB64u, b64uToBytes,
   };
 })();

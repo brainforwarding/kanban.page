@@ -1360,6 +1360,36 @@ button[disabled] { opacity: .4; pointer-events: none; }
    painting an intended state red makes a working screen look broken. */
 .sync-warn { margin: 0; font: 400 12px/1.5 var(--ui); color: var(--faint); }
 
+/* Pairing a phone is the common errand; wiring up a terminal is rare, so it
+   gets a disclosure rather than standing weight. Monospace inside, because
+   past the summary it is the machine talking. */
+.sync-cli { margin-top: 2px; }
+.sync-cli > summary {
+  cursor: pointer;
+  list-style: none;
+  align-self: flex-start;
+  padding: 5px 3px;
+  color: var(--muted);
+  font: 500 12px/1.3 var(--ui);
+  text-decoration: underline;
+  text-decoration-color: var(--line-hi);
+  text-underline-offset: 3px;
+}
+.sync-cli > summary::-webkit-details-marker { display: none; }
+.sync-cli > summary:hover { color: var(--text); }
+.sync-cli-say { margin: 4px 3px 8px; font: 400 12px/1.5 var(--ui); color: var(--faint); }
+.sync-cli-cmd {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--raise);
+  color: var(--muted);
+  font: 400 11.5px/1.7 var(--mono);
+  white-space: pre;
+  overflow-x: auto;
+}
+
 .sync-join { display: flex; flex-direction: column; gap: 7px; }
 .sync-join label {
   font: 500 10.5px/1 var(--mono);

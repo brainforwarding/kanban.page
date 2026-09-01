@@ -519,7 +519,7 @@ const normalized = payload => C.canon(C.syncable(C.merge(payload, payload)));
     replace, deferred while the interaction barrier is up. */
 function applyRemote(remote, ver, ctx = captureSync()) {
   if (!isCurrentSync(ctx)) return;
-  if ((remote.v || 2) > 2) { setSyncStatus('error'); return; } // a newer app wrote this
+  if (C.validateSyncable(remote)) { setSyncStatus('error'); return; } // a newer app, or a damaged payload
   floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
   if (syncBusy()) { pendingRemote = { remote, ver, ctx }; return; }
   sync.ver = ver;
@@ -2610,6 +2610,12 @@ function renderSync() {
     $('#sync-scan').textContent = tr('syncScanLine');
     $('#sync-url').value = link;
     $('#sync-warn').textContent = tr('syncWarning');
+    $('#sync-cli-summary').textContent = tr('syncCli');
+    $('#sync-cli-say').textContent = tr('syncCliSay');
+    // The link is never interpolated here: it is a password, and this block is
+    // the one part of the sheet a person is likely to screenshot.
+    $('#sync-cli-cmd').textContent =
+      'npm i -g github:brainforwarding/kanban.page\nkanban board add mine';
     const plate = $('#sync-qr');
     ensureQr().then(ok => {
       // the sheet may have moved on while the script loaded

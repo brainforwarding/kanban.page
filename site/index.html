@@ -476,6 +476,12 @@ h1,h2,h3,p{margin:0}
 }
 .ghmark{width:44px;height:44px;fill:var(--line-hi);flex:none}
 .ask{font:400 13px/1.5 var(--ui);color:var(--faint)}
+/* The tool is named in the machine's voice, like every other command on this
+   page; the sentence around it stays human. */
+.cli-note{margin-top:20px}
+.cli-note .cmd{font:500 12px/1 var(--mono);color:var(--muted);
+  background:var(--raise);border:1px solid var(--line);border-radius:5px;
+  padding:2px 6px;white-space:nowrap}
 .ask a{color:var(--muted);border-bottom:1px solid var(--line-hi);padding-bottom:1px;
   transition:color .2s var(--ease), border-color .2s var(--ease)}
 .ask a:hover{color:var(--accent);border-color:var(--accent-dim)}
@@ -791,6 +797,8 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
         </div>
       </div>
     </div>
+
+    <p class="ask cli-note">It works through <span class="cmd">kanban</span>, a small command-line tool for a board you already sync &mdash; <span class="cmd">npm i -g github:brainforwarding/kanban.page</span>. <a href="https://github.com/brainforwarding/kanban.page#from-a-terminal">How it works &rarr;</a></p>
   </div>
 </section>
 
@@ -1416,7 +1424,7 @@ const SCRIPT = [
   { cls: 'u',  text: 'claude\n', speed: 42 },
   { cls: 'p',  text: '› ', speed: 0, wait: 380 },
   { cls: 'u',  text: 'rate limiting shipped — move it to done, then add "write the changelog"\n', speed: 16 },
-  { cls: 'o',  text: '  ▸ reading the board\n', speed: 0, wait: 520 },
+  { cls: 'o',  text: '  ▸ kanban ls\n', speed: 0, wait: 520 },
   { cls: 'ok', text: '  ✓ Rate limiting for the API   → DONE\n',  speed: 0, wait: 620, run: miniMove },
   { cls: 'ok', text: '  ✓ Write the changelog          → DOING\n', speed: 0, wait: 760, run: miniAdd },
   { cls: 'o',  text: '  2 changes on the board\n', speed: 0, wait: 460 },

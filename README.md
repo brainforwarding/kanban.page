@@ -93,16 +93,69 @@ deleted once it's empty.
   opens offline after that, and offers **Update** when a new version ships —
   which changes the app files, never your cards.
 
+## From a terminal
+
+Once a board syncs, it is reachable from a terminal — so a script, or an
+agent, can read and edit it without a browser open anywhere. Same relay, same
+merge rules, same end-to-end encryption; it is simply a second client.
+
+```bash
+npm i -g github:brainforwarding/kanban.page
+```
+
+Turn on sync in the app (**⋯ → Sync devices**), copy the sync link, then hand
+it to the CLI **through a pipe** — never as an argument, where it would land
+in your shell history:
+
+```bash
+pbpaste | kanban board add work        # macOS; stores the secret in the keychain
+kanban ls                              # read the board
+kanban add "ship the thing" --project Sales
+kanban done 4f2a                       # ids take any unambiguous prefix
+kanban report --md                     # this week's progress, as markdown
+```
+
+Every write prints the board it fetched before it changes anything, because a
+write reaches every device you have open in about a second:
+
+```
+work · INBOX 27 / DOING 18 / DONE 63 · ver 412
+  +  INBOX  ship the thing  · Sales
+ok · ver 413
+```
+
+Add `--dry-run` to stop before the write, or `--json` to get one object on
+stdout instead of prose. `kanban help` lists everything.
+
+**The sync link is a password.** It is the whole capability — anyone holding it
+can read and edit the board, and there is no account to revoke. The CLI keeps
+it in your OS keychain, never accepts it as an argument, and never prints it.
+
+### Letting an agent use it
+
+Drop [`docs/agents.md`](docs/agents.md) into your own project as `AGENTS.md`
+(or paste it into a `CLAUDE.md`) and an agent has what it needs: the commands,
+the id rules, and the two things it must not assume. It only needs a board
+already registered with `kanban board add`.
+
+The CLI cannot create a board and never deletes one — sync is turned on, and
+ended, in the app. See [`docs/cli.md`](docs/cli.md) for the design and the
+invariants it holds to.
+
 ## Develop
 
 ```bash
 node --test tests/core.test.js     # 114 unit tests, no dependencies
+node --test tests/cli.test.js      # 22 CLI tests, against a fake relay
 ```
 
 They cover what is easy to get silently wrong: calendar dates across DST,
 Monday–Sunday boundaries across month and year ends, report aggregation,
 markdown output, storage migration, and the sync merge — clocks, tombstones,
-and three replicas converging. Then open `tests/dom.test.html` in Chrome for
+and three replicas converging. The CLI suite covers the ways a headless
+writer could lose work: a lost response double-adding a card, a retry
+restamping clocks, a concurrent delete losing to a stale edit, and a
+future schema being written back as an old one. Then open `tests/dom.test.html` in Chrome for
 50 interaction tests — they drive the real app in an iframe and report
 pass/fail in the page title, against a `?ns=test` board that never touches
 your data.

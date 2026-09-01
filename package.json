@@ -1,0 +1,16 @@
+{
+  "name": "kanban.page",
+  "version": "1.0.0",
+  "description": "Headless CLI for a synced kanban.page board — so an agent can read and edit it without driving a browser.",
+  "bin": { "kanban": "cli/kanban.js" },
+  "main": "core.js",
+  "engines": { "node": ">=20" },
+  "files": ["cli/", "core.js", "docs/cli.md", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "node --test tests/core.test.js tests/cli.test.js"
+  },
+  "repository": { "type": "git", "url": "git+https://github.com/brainforwarding/kanban.page.git" },
+  "homepage": "https://kanban.page",
+  "license": "MIT",
+  "keywords": ["kanban", "cli", "agent", "local-first", "end-to-end-encrypted"]
+}
