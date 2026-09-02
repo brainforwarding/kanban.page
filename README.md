@@ -103,7 +103,7 @@ agent, can read and edit it without a browser open anywhere. Same relay, same
 merge rules, same end-to-end encryption; it is simply a second client.
 
 ```bash
-npm i -g github:brainforwarding/kanban.page
+npm i -g kanban.page
 ```
 
 Turn on sync in the app (**⋯ → Sync devices**), copy the sync link, then hand

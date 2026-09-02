@@ -2615,7 +2615,7 @@ function renderSync() {
     // The link is never interpolated here: it is a password, and this block is
     // the one part of the sheet a person is likely to screenshot.
     $('#sync-cli-cmd').textContent =
-      'npm i -g github:brainforwarding/kanban.page\nkanban board add mine';
+      'npm i -g kanban.page\nkanban board add mine';
     const plate = $('#sync-qr');
     ensureQr().then(ok => {
       // the sheet may have moved on while the script loaded
