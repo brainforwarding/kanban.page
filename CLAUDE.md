@@ -7,11 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A personal kanban board that runs from a file: open `index.html` in Chrome. Vanilla HTML/CSS/JS — no build step, no dependencies, no framework. All state lives in `localStorage` (`board.v2`, or `board.v2.<ns>` when opened with `?ns=<name>` — use a namespace for a scratch board that never touches real data).
 
 Optional device sync is the one thing that touches the network, and only after the user turns it on: an end-to-end encrypted Cloudflare Worker relay in `relay/`, addressed by a secret with no account anywhere. `docs/sync.md` is the design record; the invariants an agent can break are below.
+A synced board is also reachable headlessly through `cli/` — same relay, same
+merge, no browser.
 
 ## Commands
 
 ```bash
+npm test                                                    # core + CLI, no deps
 node --test tests/core.test.js                              # unit tests, no deps
+node --test tests/cli.test.js                               # CLI, against a fake relay
 node --test --test-name-pattern="markdown" tests/core.test.js   # one test by name
 ```
 
@@ -30,12 +34,23 @@ Per-test failures live in `window.__results` on that page. Keep the README's tes
 
 ## Architecture
 
-Four files, strict split:
+The browser app is four files, strict split:
 
 - `core.js` — pure logic, zero DOM: dates/weeks, report aggregation, markdown export, event log, storage migration, the sync merge and its crypto. Exposed as the `BoardCore` global and via CommonJS for the node tests. New logic with edge cases belongs here, where it's unit-testable.
 - `app.js` — everything else: rendering, drag, editor, composer, projects, report modal. Classic script (no modules); top-level function declarations are deliberately global — the DOM tests call them (`openReport`, `addTask`, …) plus the `window.__board` seam for state.
 - `styles.css` — design tokens at the top (light + dark via `[data-theme]`), then every component.
 - `index.html` — static markup shells; `app.js` fills them.
+
+`cli/` is a **second client of the same relay**, not a second implementation:
+`kanban.js` (entry/dispatch), `boards.js` (name → secret; keychain), `relay.js`
+(GET/PUT and the status taxonomy), `ops.js` (mutations, each mirroring its
+`app.js` counterpart) and `format.js`. It `require`s `core.js` directly — never
+vendored, never re-implemented — so it inherits the merge, the clocks and the
+crypto. Zero dependencies, Node 20+. `docs/cli.md` is its design record and
+`docs/agents.md` is the file a user drops into their own project so an agent
+knows the commands. The rules it must not break are the sync ones below, plus:
+it never creates a board, never issues a relay `DELETE`, never reorders or adds
+a stage, and never takes the secret as an argument.
 
 `docs/design-brief.md` is the original spec and still explains intent (data model rationale, motion spec, type/voice rules); where it conflicts with README.md, the README is current — e.g. the exported markdown no longer matches the brief's sample (see below).
 

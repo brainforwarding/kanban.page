@@ -479,7 +479,7 @@ h1,h2,h3,p{margin:0}
 /* The tool is named in the machine's voice, like every other command on this
    page; the sentence around it stays human. */
 .cli-note{margin-top:20px}
-.cli-note .cmd{font:500 12px/1 var(--mono);color:var(--muted);
+.cmd{font:500 .92em/1 var(--mono);color:var(--muted);
   background:var(--raise);border:1px solid var(--line);border-radius:5px;
   padding:2px 6px;white-space:nowrap}
 .ask a{color:var(--muted);border-bottom:1px solid var(--line-hi);padding-bottom:1px;
@@ -708,7 +708,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
       <a class="btn primary" href="https://kanban.page/app/">Open the board</a>
       <a class="btn ghost" href="https://github.com/brainforwarding/kanban.page">Read the source</a>
     </div>
-    <p class="fineprint" id="fine">free &nbsp;·&nbsp; MIT &nbsp;·&nbsp; <span>installs to your dock</span> &nbsp;·&nbsp; <span>works offline</span> &nbsp;·&nbsp; <span>syncs to your phone</span></p>
+    <p class="fineprint" id="fine">free &nbsp;·&nbsp; MIT &nbsp;·&nbsp; <span>installs to your dock</span> &nbsp;·&nbsp; <span>works offline</span> &nbsp;·&nbsp; <span>syncs to your phone</span> &nbsp;·&nbsp; <span>works from a terminal</span></p>
   </div>
 
   <div class="wrap stage">
@@ -775,8 +775,8 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
 <section class="sec">
   <div class="wrap">
     <p class="eyebrow rv-print">Agents</p>
-    <h2 class="head rv" style="--d:.1s">Each card remembers its <em>agent session</em>.</h2>
-    <p class="sub rv" style="--d:.19s">If you run Claude Code or Codex in a terminal, every task has a session you can pick up again. Keep that resume command on the card: click it, paste it in your terminal, and you&rsquo;re back in that thread. <b>And your agent can keep the board up to date itself.</b></p>
+    <h2 class="head rv" style="--d:.1s">Your agent <em>moves its own cards</em>.</h2>
+    <p class="sub rv" style="--d:.19s">Once a board syncs it is reachable from a terminal: give Claude Code or Codex the <span class="cmd">kanban</span> command and it reads the board, moves a card and adds one, with no browser open anywhere. <b>And each card carries the session working it</b>, so you can see which thread owns which task &mdash; click it to step back in.</p>
 
     <div class="split rv-panel" style="--d:.3s">
       <div class="pane">
@@ -798,7 +798,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
       </div>
     </div>
 
-    <p class="ask cli-note">It works through <span class="cmd">kanban</span>, a small command-line tool for a board you already sync &mdash; <span class="cmd">npm i -g github:brainforwarding/kanban.page</span>. <a href="https://github.com/brainforwarding/kanban.page#from-a-terminal">How it works &rarr;</a></p>
+    <p class="ask cli-note"><span class="cmd">npm i -g github:brainforwarding/kanban.page</span> &mdash; same relay, same encryption and same merge rules as your phone; it is simply a second client. <a href="https://github.com/brainforwarding/kanban.page#from-a-terminal">How it works &rarr;</a></p>
   </div>
 </section>
 
@@ -934,6 +934,9 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
       </details>
       <details class="qa"><summary>Does it work on my phone?<i></i></summary>
         <div class="qa-body"><p><span>Yes. Open <code>⋯ → Sync devices</code> on the board you already have, scan the QR with your phone, and it&rsquo;s the same board on both &mdash; no account. You can also move one across with <code>⋯ → Export backup</code>, then <code>Import backup</code>.</span></p></div>
+      </details>
+      <details class="qa"><summary>Can my agent really edit it?<i></i></summary>
+        <div class="qa-body"><p><span>Yes. Install <code>kanban</code>, register the board once with the sync link from <code>⋯ → Sync devices</code>, and Claude Code or Codex reads and edits it from the terminal &mdash; same relay, same encryption. That link is the whole capability, so the tool keeps it in your OS keychain, never takes it as an argument and never prints it.</span></p></div>
       </details>
     </div>
 
@@ -1425,8 +1428,10 @@ const SCRIPT = [
   { cls: 'p',  text: '› ', speed: 0, wait: 380 },
   { cls: 'u',  text: 'rate limiting shipped — move it to done, then add "write the changelog"\n', speed: 16 },
   { cls: 'o',  text: '  ▸ kanban ls\n', speed: 0, wait: 520 },
-  { cls: 'ok', text: '  ✓ Rate limiting for the API   → DONE\n',  speed: 0, wait: 620, run: miniMove },
-  { cls: 'ok', text: '  ✓ Write the changelog          → DOING\n', speed: 0, wait: 760, run: miniAdd },
+  { cls: 'o',  text: '  ▸ kanban done 4f2a\n', speed: 0, wait: 560 },
+  { cls: 'ok', text: '  ✓ Rate limiting for the API   → DONE\n',  speed: 0, wait: 420, run: miniMove },
+  { cls: 'o',  text: '  ▸ kanban add "write the changelog"\n', speed: 0, wait: 620 },
+  { cls: 'ok', text: '  ✓ Write the changelog          → DOING\n', speed: 0, wait: 420, run: miniAdd },
   { cls: 'o',  text: '  2 changes on the board\n', speed: 0, wait: 460 },
 ];
 

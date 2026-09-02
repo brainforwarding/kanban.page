@@ -1,6 +1,9 @@
-# kanban CLI — spec
+# kanban CLI — design
 
-*Status: draft, revised after review. Nothing here is implemented yet.*
+*Status: shipped. `cli/` implements this and `tests/cli.test.js` holds it to it.
+This document is the reasoning, not the reference — `kanban help` and the
+README's [From a terminal](../README.md#from-a-terminal) are what you run. Where
+this document and the code disagree, the code is right and this is the bug.*
 
 ## Why this exists
 

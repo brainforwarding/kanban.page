@@ -10,10 +10,13 @@ and it reaches your other devices through a server that cannot read it.
 
 ## What's different
 
-**Every card can hold an agent session.** If you run Claude Code or Codex in a
-terminal, keep the resume command on the card (`claude --resume …`, `codex
-resume …`). Click it and it's on your clipboard; copy one from a terminal and
-`⌘V` on the board starts a card with that session attached.
+**Your agent moves its own cards.** Once a board syncs it is reachable from a
+terminal, so Claude Code or Codex can read it, move a card and add one with no
+browser open anywhere — see [From a terminal](#from-a-terminal). And each card
+carries the session working it (`claude --resume …`, `codex resume …`), so you
+can see which thread owns which task: click it and it's on your clipboard, and
+copying one from a terminal then pressing `⌘V` on the board starts a card with
+that session already attached.
 
 **Friday's update is already written.** `R` opens the week — everything you
 created or moved, Monday to Sunday, split into what shipped and what is still in
@@ -41,7 +44,7 @@ anyone you give it to can read and edit the board, while the server only ever
 holds bytes it cannot decrypt. Every device keeps a complete local copy, and
 sync is reversible from either end. See [docs/sync.md](docs/sync.md).
 
-**Your agent can change the board itself.** ~4,000 lines of vanilla HTML/CSS/JS,
+**Want it to work differently? Ask your agent.** ~4,000 lines of vanilla HTML/CSS/JS,
 no build step, no dependencies, and a `CLAUDE.md` that lands an agent oriented
 instead of guessing.
 
@@ -146,7 +149,7 @@ invariants it holds to.
 
 ```bash
 node --test tests/core.test.js     # 114 unit tests, no dependencies
-node --test tests/cli.test.js      # 22 CLI tests, against a fake relay
+node --test tests/cli.test.js      # 23 CLI tests, against a fake relay
 ```
 
 They cover what is easy to get silently wrong: calendar dates across DST,
@@ -166,6 +169,7 @@ styles.css   design tokens + every component
 core.js      pure logic: dates, weeks, report aggregation, markdown, migration, merge
 app.js       the app: rendering, drag, editor, projects, report, sync
 qr.js        vendored QR encoder (MIT, Project Nayuki), loaded only by the sync sheet
+cli/         the headless client: same relay, same merge, no browser
 relay/       the sync relay: one Cloudflare Worker, deploy your own with `wrangler deploy`
 ```
 
