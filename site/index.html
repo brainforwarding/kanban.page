@@ -509,6 +509,31 @@ h1,h2,h3,p{margin:0}
   opacity:1;transform:none;
   transition:opacity .6s var(--ease) .42s, transform .95s var(--ease) .42s;
 }
+/* ── teams: one person assigns, the other finishes ──── */
+
+.who{padding:18px 16px 20px;background:var(--bg-2);flex:1;display:flex;flex-direction:column;gap:16px}
+.who h4{margin:0;font:500 17px/1.3 var(--ui);letter-spacing:-.01em;color:var(--text)}
+.who-line{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.who-lbl{font:400 10px/1 var(--mono);letter-spacing:.15em;color:var(--faint)}
+.pick{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px 0 4px;border-radius:999px;
+  border:1px solid var(--line);font:500 12px/1 var(--ui);color:var(--muted)}
+.pick.on{border-color:var(--line-hi);background:var(--raise-hi);color:var(--text)}
+.av{display:inline-grid;place-items:center;flex:none;width:18px;height:18px;border-radius:999px;
+  background:color-mix(in srgb,var(--c) 45%,var(--surface));color:color-mix(in srgb,var(--c) 45%,var(--text));
+  font:700 7.5px/1 var(--ui);letter-spacing:.02em}
+.hist{display:grid;gap:8px;padding-top:12px;border-top:1px solid var(--line)}
+.hrow{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.hrow b{color:var(--text);font-weight:600}
+.hrow .when{margin-left:auto;font:400 10px/1 var(--mono);letter-spacing:.06em;color:var(--faint)}
+.card .newtag{display:flex;align-items:center;gap:6px;margin-bottom:5px;
+  font:500 9.5px/1 var(--mono);letter-spacing:.12em;color:var(--accent)}
+.card .newtag::before{content:'';width:6px;height:6px;border-radius:999px;background:var(--accent)}
+.card.fresh{border-color:var(--accent-dim)}
+.card .doneby{margin-left:auto;font:500 10px/1 var(--mono);letter-spacing:.06em;color:#4FD1A5}
+.card .meta .av{margin-left:8px}
+.claims.row{grid-template-columns:repeat(3,1fr);gap:28px;margin-top:38px}
+@media (max-width:900px){.claims.row{grid-template-columns:1fr;gap:22px}}
+
 .claims{display:grid;gap:24px}
 .claim dt{font:500 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
   color:var(--accent);margin-bottom:7px}
@@ -708,7 +733,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
       <a class="btn primary" href="https://kanban.page/app/">Open the board</a>
       <a class="btn ghost" href="https://github.com/brainforwarding/kanban.page">Read the source</a>
     </div>
-    <p class="fineprint" id="fine">free &nbsp;·&nbsp; MIT &nbsp;·&nbsp; <span>installs to your dock</span> &nbsp;·&nbsp; <span>works offline</span> &nbsp;·&nbsp; <span>syncs to your phone</span> &nbsp;·&nbsp; <span>works from a terminal</span></p>
+    <p class="fineprint" id="fine">free &nbsp;·&nbsp; MIT &nbsp;·&nbsp; <span>installs to your dock</span> &nbsp;·&nbsp; <span>works offline</span> &nbsp;·&nbsp; <span>syncs to your phone</span> &nbsp;·&nbsp; <span>works from a terminal</span> &nbsp;·&nbsp; <span>works with your team</span></p>
   </div>
 
   <div class="wrap stage">
@@ -873,6 +898,60 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
   </div>
 </section>
 
+<!-- ── teams ──────────────────────────────────────────── -->
+<section class="sec">
+  <div class="wrap">
+    <p class="eyebrow rv-print">Teams</p>
+    <h2 class="head rv" style="--d:.1s">Hand someone a card. <em>See it land</em>.</h2>
+    <p class="sub rv" style="--d:.19s">Make a team board beside your own. Assign a card &mdash; your teammate sees it marked new, drags it to Done, and <b>the card says who finished it</b>. Your personal board stays yours.</p>
+
+    <div class="split rv-panel" style="--d:.3s">
+      <div class="pane">
+        <div class="panehead"><span class="dots"><i></i><i></i><i></i></span> ANDREA · TEAM</div>
+        <div class="who">
+          <h4>Rate-limit the webhook endpoint</h4>
+          <div class="who-line">
+            <span class="who-lbl">ASSIGNEE</span>
+            <span class="pick on"><span class="av" style="--c:#6FA8FF">SM</span>Sebastián</span>
+            <span class="pick"><span class="av" style="--c:#F58FA8">AR</span>Andrea</span>
+          </div>
+          <div class="hist">
+            <div class="hrow"><span class="av" style="--c:#F58FA8">AR</span><span><b>Andrea</b> assigned it to Sebastián</span><span class="when">MON 10:02</span></div>
+            <div class="hrow"><span class="av" style="--c:#6FA8FF">SM</span><span><b>Sebastián</b> moved it to Done</span><span class="when">TUE 16:40</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="pane">
+        <div class="panehead">YOU · TEAM</div>
+        <div class="mini">
+          <section class="col"><header class="colhead"><span>INBOX</span><span class="coln">1</span></header><div class="drop">
+            <article class="card fresh" style="--pc:#6FA8FF"><span class="newtag">NEW</span><h3>Fix Safari drag ghost</h3><div class="meta"><span class="proj">Website</span><span class="age">1h</span><span class="av" style="--c:#6FA8FF">SM</span></div></article>
+          </div></section>
+          <section class="col"><header class="colhead"><span>DONE</span><span class="coln">2</span></header><div class="drop">
+            <article class="card" style="--pc:#4FD1A5"><h3>Rate-limit the webhook endpoint</h3><div class="meta"><span class="proj">API</span><span class="doneby">✓ SM · 2H</span><span class="av" style="--c:#6FA8FF">SM</span></div></article>
+            <article class="card" style="--pc:#4FD1A5"><h3>Invoice PDF export</h3><div class="meta"><span class="proj">API</span><span class="doneby">✓ SM · YEST</span><span class="av" style="--c:#6FA8FF">SM</span></div></article>
+          </div></section>
+        </div>
+      </div>
+    </div>
+
+    <dl class="claims row rv" style="--d:.4s">
+      <div class="claim">
+        <dt>No private cards</dt>
+        <dd>A shared key cannot keep secrets, so personal work lives on your own board &mdash; never half-hidden on the team&rsquo;s.</dd>
+      </div>
+      <div class="claim">
+        <dt>Your sessions stay yours</dt>
+        <dd>An agent session on a team card is stored on your board, with the computer it runs on. Teammates never see it.</dd>
+      </div>
+      <div class="claim">
+        <dt>One weekly report</dt>
+        <dd>Your week across your board and your teams, in one file. Team rows only when you moved them.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
 <!-- ── fork: the page takes a breath before the ask ──── -->
 <section class="sec">
   <div class="wrap">
@@ -934,6 +1013,9 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
       </details>
       <details class="qa"><summary>Does it work on my phone?<i></i></summary>
         <div class="qa-body"><p><span>Yes. Open <code>⋯ → Sync devices</code> on the board you already have, scan the QR with your phone, and it&rsquo;s the same board on both &mdash; no account. You can also move one across with <code>⋯ → Export backup</code>, then <code>Import backup</code>.</span></p></div>
+      </details>
+      <details class="qa"><summary>Can my team use it?<i></i></summary>
+        <div class="qa-body"><p><span>Yes. Open the switcher next to <code>kanban.page</code>, choose <code>New team board…</code>, say who you are, and share the link. Assign a card and your teammate sees it marked new; the Done card says who finished it. Your personal board stays yours. There are no accounts &mdash; the link is the key, so share it like one.</span></p></div>
       </details>
       <details class="qa"><summary>Can my agent really edit it?<i></i></summary>
         <div class="qa-body"><p><span>Yes. Install <code>kanban</code>, register the board once with the sync link from <code>⋯ → Sync devices</code>, and Claude Code or Codex reads and edits it from the terminal &mdash; same relay, same encryption. That link is the whole capability, so the tool keeps it in your OS keychain, never takes it as an argument and never prints it.</span></p></div>
