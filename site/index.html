@@ -531,7 +531,7 @@ h1,h2,h3,p{margin:0}
 .card.fresh{border-color:var(--accent-dim)}
 .card .doneby{margin-left:auto;font:500 10px/1 var(--mono);letter-spacing:.06em;color:#4FD1A5}
 .card .meta .av{margin-left:8px}
-.claims.row{grid-template-columns:repeat(3,1fr);gap:28px;margin-top:38px}
+.claims.row{grid-template-columns:repeat(2,minmax(0,300px));gap:40px;margin-top:38px}
 @media (max-width:900px){.claims.row{grid-template-columns:1fr;gap:22px}}
 
 .claims{display:grid;gap:24px}
@@ -903,7 +903,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
   <div class="wrap">
     <p class="eyebrow rv-print">Teams</p>
     <h2 class="head rv" style="--d:.1s">Hand someone a card. <em>See it land</em>.</h2>
-    <p class="sub rv" style="--d:.19s">Make a team board beside your own. Assign a card &mdash; your teammate sees it marked new, drags it to Done, and <b>the card says who finished it</b>. Your personal board stays yours.</p>
+    <p class="sub rv" style="--d:.19s">Assign a card to a teammate. When it&rsquo;s done, <b>the card says who finished it</b>.</p>
 
     <div class="split rv-panel" style="--d:.3s">
       <div class="pane">
@@ -937,16 +937,12 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
 
     <dl class="claims row rv" style="--d:.4s">
       <div class="claim">
-        <dt>No private cards</dt>
-        <dd>A shared key cannot keep secrets, so personal work lives on your own board &mdash; never half-hidden on the team&rsquo;s.</dd>
+        <dt>Your board stays private</dt>
+        <dd>Team cards live on their own board.</dd>
       </div>
       <div class="claim">
-        <dt>Your sessions stay yours</dt>
-        <dd>An agent session on a team card is stored on your board, with the computer it runs on. Teammates never see it.</dd>
-      </div>
-      <div class="claim">
-        <dt>One weekly report</dt>
-        <dd>Your week across your board and your teams, in one file. Team rows only when you moved them.</dd>
+        <dt>Sessions stay yours</dt>
+        <dd>Only you see your agent session on a team card.</dd>
       </div>
     </dl>
   </div>
@@ -1015,7 +1011,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
         <div class="qa-body"><p><span>Yes. Open <code>⋯ → Sync devices</code> on the board you already have, scan the QR with your phone, and it&rsquo;s the same board on both &mdash; no account. You can also move one across with <code>⋯ → Export backup</code>, then <code>Import backup</code>.</span></p></div>
       </details>
       <details class="qa"><summary>Can my team use it?<i></i></summary>
-        <div class="qa-body"><p><span>Yes. Open the switcher next to <code>kanban.page</code>, choose <code>New team board…</code>, say who you are, and share the link. Assign a card and your teammate sees it marked new; the Done card says who finished it. Your personal board stays yours. There are no accounts &mdash; the link is the key, so share it like one.</span></p></div>
+        <div class="qa-body"><p><span>Yes. Click <code>Personal</code> at the top, choose <code>New team board…</code> and share the link. Anyone with it can edit that board.</span></p></div>
       </details>
       <details class="qa"><summary>Can my agent really edit it?<i></i></summary>
         <div class="qa-body"><p><span>Yes. Install <code>kanban</code>, register the board once with the sync link from <code>⋯ → Sync devices</code>, and Claude Code or Codex reads and edits it from the terminal &mdash; same relay, same encryption. That link is the whole capability, so the tool keeps it in your OS keychain, never takes it as an argument and never prints it.</span></p></div>
