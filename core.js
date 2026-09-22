@@ -109,7 +109,12 @@ const BoardCore = (() => {
    * through it, which rows arrive pre-ticked. Omit it and no row gets a tense,
    * so nothing is pre-ticked and nothing is announced under a heading.
    */
-  function aggregateWeek(events, monday, lookup, doneStage) {
+  function aggregateWeek(events, monday, lookup, done) {
+    // `done` is the done column as { id, name } — or, for older callers, its
+    // name alone. Rows whose events carry stage ids are classified by id;
+    // legacy rows fall back to the name, and never produce a doneBy.
+    const doneStage = done && typeof done === 'object' ? done.name : done;
+    const doneId = done && typeof done === 'object' ? done.id : null;
     const week = (events || []).filter(e => contains(monday, e.day)).sort(byDayThenAt);
     const rows = new Map();
 
@@ -130,12 +135,20 @@ const BoardCore = (() => {
           path: [e.type === 'created' ? 'New' : e.from],
           project: null,
           deleted: false,
+          // endpoint ids: 'new' stands for a card created this week
+          fromId: e.type === 'created' ? 'new' : (e.fromColumnId || null),
+          toId: null,
+          byIds: [],
+          doneBy: null,
         };
         rows.set(e.taskId, r);
       }
-      if (e.type === 'created') { r.created = true; r.from = 'New'; }
+      if (e.type === 'created') { r.created = true; r.from = 'New'; r.fromId = 'new'; }
       else r.moves++;
       r.to = e.to;
+      r.toId = e.toColumnId || null;
+      if (e.by && !r.byIds.includes(e.by)) r.byIds.push(e.by);
+      if (doneId && e.by && e.toColumnId === doneId && e.fromColumnId !== doneId) r.doneBy = e.by;
       r.day = e.day;
       r.at = e.at;
       r.eventIds.push(e.id);
@@ -172,9 +185,12 @@ const BoardCore = (() => {
       // No doneStage means the caller cannot say where the done line is, so no
       // tense is claimed at all. Never guess "shipped" — toMarkdown renders an
       // untensed row under no heading, which under-claims instead of lying.
+      const byId = doneId && r.toId && r.fromId;
       r.tense = !doneStage ? null
+        : byId ? ((r.toId === doneId && r.fromId !== doneId) ? 'shipped' : 'inflight')
         : (r.to === doneStage && r.from !== doneStage) ? 'shipped'
         : 'inflight';
+      if (!byId) r.doneBy = null;
       // The export's opinion, made visible. This is the only place that decides
       // what a report announces by default — toMarkdown has no second opinion.
       // Everything else is still listed, unticked, one click from being
@@ -286,6 +302,13 @@ const BoardCore = (() => {
       at: now,
       day: backdated ? asOf : ymd(now),
       backdated,
+      // Stage ids beside the names: names can repeat and rename, so "moved
+      // into the done column" is only decidable by id. Attribution only when
+      // the caller knows who it is — missing means unknown, never guessed.
+      // All four are immutable; rewriteDay touches `day` alone.
+      ...(fields.fromColumnId ? { fromColumnId: fields.fromColumnId } : {}),
+      ...(fields.toColumnId ? { toColumnId: fields.toColumnId } : {}),
+      ...(fields.by ? { by: fields.by, byName: fields.byName || null } : {}),
     };
   }
 
@@ -404,10 +427,14 @@ const BoardCore = (() => {
   const TASK_FIELDS = [
     ['title', ['title']],
     ['notes', ['notes']],
-    ['session', ['session']],
+    // A session command without its computer is the ambiguity docs/computers.md
+    // removes, so the three merge as one atomic group.
+    ['session', ['session', 'sessionMachine', 'sessionCwd']],
     ['project', ['projectId']],
     ['flag', ['flag']],
     ['archive', ['archivedAt', 'archivedFrom']],
+    // docs/team.md: an assignee without who assigned it is not a state.
+    ['assignee', ['assigneeId', 'assignedBy', 'assignedAt']],
   ];
   const taskFieldValue = (t, name, keys) => keys.length === 1
     ? t[keys[0]]
@@ -435,7 +462,8 @@ const BoardCore = (() => {
   });
   const taskExtraContent = t => {
     const {
-      id, title, notes, session, projectId, flag, archivedAt, archivedFrom,
+      id, title, notes, session, sessionMachine, sessionCwd, projectId, flag,
+      archivedAt, archivedFrom, assigneeId, assignedBy, assignedAt,
       createdAt, updatedAt, mt, pmt, existMt, fieldMt, columnId, order, ...extra
     } = t;
     return extra;
@@ -457,7 +485,14 @@ const BoardCore = (() => {
     for (const c of st.columns || []) m = Math.max(m, c.mt || 0);
     for (const p of st.projects || []) m = Math.max(m, p.mt || 0);
     for (const ts of Object.values(st.tombstones || {})) m = Math.max(m, ts);
-    return Math.max(m, st.columnsMt || 0, st.projectsMt || 0);
+    // team and computer data: a fast-clock leave must never sit above a
+    // later rejoin, so every one of their clocks counts
+    for (const x of st.members || []) m = Math.max(m, x.mt || 0);
+    for (const x of st.machines || []) m = Math.max(m, x.mt || 0);
+    for (const x of st.teams || []) m = Math.max(m, x.joinMt || 0, x.mt || 0, x.memberMt || 0);
+    for (const ts of Object.values(st.teamsLeft || {})) m = Math.max(m, ts || 0);
+    for (const x of Object.values(st.privateSessions || {})) m = Math.max(m, (x && x.mt) || 0);
+    return Math.max(m, st.columnsMt || 0, st.projectsMt || 0, st.machinesMt || 0);
   }
 
   /**
@@ -532,6 +567,7 @@ const BoardCore = (() => {
     for (const [list, oldList, key] of [
       [next.columns, prev.columns, 'columnsMt'],
       [next.projects, prev.projects, 'projectsMt'],
+      [next.machines, prev.machines, 'machinesMt'],
     ]) {
       const old = new Map((oldList || []).map(c => [c.id, c]));
       for (const c of list || []) {
@@ -547,6 +583,45 @@ const BoardCore = (() => {
 
     if ((prev.tombstones && Object.keys(prev.tombstones).length) !==
         (next.tombstones && Object.keys(next.tombstones).length)) stamped = true;
+    // A tombstone written as 0 asks to be stamped here, past everything
+    // observed — a wall-clock stamp could sit below a fast-clocked item's mt
+    // and lose to it (computers use this; see docs/computers.md).
+    for (const [id, ts] of Object.entries(next.tombstones || {})) {
+      if (ts === 0 && !(prev.tombstones && prev.tombstones[id])) { next.tombstones[id] = clock; stamped = true; }
+    }
+
+    // Roster: per member, like a project but with no order vector.
+    const oldMembers = new Map((prev.members || []).map(x => [x.id, x]));
+    for (const x of next.members || []) {
+      const before = oldMembers.get(x.id);
+      if (!before || canon(itemContent(before)) !== canon(itemContent(x))) { x.mt = clock; stamped = true; }
+    }
+
+    // Teams you belong to (personal board). An entry absent from the last
+    // save and present now is a (re)join and starts a new generation; one
+    // present in both keeps its joinMt whatever else changed, so a stale tab
+    // editing a label cannot outvote a leave. Label and identity have their
+    // own clocks so renaming a team never fights choosing who you are.
+    const oldTeams = new Map((prev.teams || []).map(x => [x.id, x]));
+    for (const x of next.teams || []) {
+      const before = oldTeams.get(x.id);
+      if (!before) { x.joinMt = clock; x.mt = clock; x.memberMt = clock; stamped = true; continue; }
+      if ((before.label || '') !== (x.label || '')) { x.mt = clock; stamped = true; }
+      if ((before.memberId || null) !== (x.memberId || null)) { x.memberMt = clock; stamped = true; }
+    }
+    // A new leave tombstone is stamped now. An existing one never moves on
+    // its own; leaving again after a rejoin writes any other value (the app
+    // writes 0) and is re-stamped past the rejoin it undoes.
+    for (const id of Object.keys(next.teamsLeft || {})) {
+      const before = prev.teamsLeft ? prev.teamsLeft[id] : undefined;
+      if (before == null || next.teamsLeft[id] !== before) { next.teamsLeft[id] = clock; stamped = true; }
+    }
+    // Private sessions for team cards (personal board), per key.
+    const oldPriv = prev.privateSessions || {};
+    for (const [k, v] of Object.entries(next.privateSessions || {})) {
+      const before = oldPriv[k];
+      if (!before || canon(itemContent(before)) !== canon(itemContent(v))) { v.mt = clock; stamped = true; }
+    }
 
     if (stamped) delete next.seed;
     return next;
@@ -561,17 +636,36 @@ const BoardCore = (() => {
    * client compare "what I have" against "what the relay has" with a string
    * and never push a board the relay already holds.
    */
-  const syncable = st => ({
-    v: 2,
-    columns: st.columns,
-    columnsMt: st.columnsMt || 0,
-    projects: st.projects,
-    projectsMt: st.projectsMt || 0,
-    tasks: (st.tasks || []).slice().sort((x, y) => x.id < y.id ? -1 : x.id > y.id ? 1 : 0),
-    tombstones: Object.fromEntries(Object.entries(st.tombstones || {}).sort(([a], [b]) => a < b ? -1 : 1)),
-    events: (st.events || []).slice()
-      .sort((x, y) => (x.at || 0) - (y.at || 0) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)),
-  });
+  const byKey = o => Object.fromEntries(Object.entries(o || {}).sort(([a], [b]) => a < b ? -1 : 1));
+  const byIdSort = l => (l || []).slice().sort((x, y) => x.id < y.id ? -1 : x.id > y.id ? 1 : 0);
+  /** Team and computer data an older client would silently drop (its
+      whitelist) or corrupt (its fieldMt rebuild). Any of it makes a board v3,
+      which every older client refuses instead. docs/team.md → Schema. */
+  const hasV3Data = st => !!((st.members && st.members.length) || (st.teams && st.teams.length)
+    || (st.teamsLeft && Object.keys(st.teamsLeft).length)
+    || (st.machines && st.machines.length)
+    || (st.privateSessions && Object.keys(st.privateSessions).length)
+    || (st.tasks || []).some(t => t.assigneeId || t.assignedBy || t.sessionMachine || t.sessionCwd));
+  const syncable = st => {
+    const out = {
+      v: hasV3Data(st) ? 3 : 2,
+      columns: st.columns,
+      columnsMt: st.columnsMt || 0,
+      projects: st.projects,
+      projectsMt: st.projectsMt || 0,
+      tasks: byIdSort(st.tasks),
+      tombstones: byKey(st.tombstones),
+      events: (st.events || []).slice()
+        .sort((x, y) => (x.at || 0) - (y.at || 0) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)),
+    };
+    // Emitted only when present, so a v2 board serializes byte for byte as before.
+    if (st.members && st.members.length) out.members = byIdSort(st.members);
+    if (st.teams && st.teams.length) out.teams = byIdSort(st.teams);
+    if (st.teamsLeft && Object.keys(st.teamsLeft).length) out.teamsLeft = byKey(st.teamsLeft);
+    if (st.machines && st.machines.length) { out.machines = st.machines; out.machinesMt = st.machinesMt || 0; }
+    if (st.privateSessions && Object.keys(st.privateSessions).length) out.privateSessions = byKey(st.privateSessions);
+    return out;
+  };
 
   /**
    * Is this decrypted payload a board this client may write back?
@@ -585,8 +679,18 @@ const BoardCore = (() => {
    *
    * Returns null when acceptable, else a short reason string.
    */
-  const SYNC_V = 2;
-  function validateSyncable(x) {
+  const SYNC_V = 3;
+  const isStr = v => typeof v === 'string' && v.length > 0;
+  const isNum = v => typeof v === 'number' && isFinite(v);
+  const ICONS = ['laptop', 'desktop', 'mini', 'server'];
+  /**
+   * `kind` is the namespace the payload is about to land in: 'personal' (the
+   * null namespace), 'team' (t-…), or omitted for a kind-free structural
+   * check — the step that runs before a candidate is routed. Personal and team
+   * data never mix: a roster on the personal board, or a team list or private
+   * sessions on a team board, is refused before adoption, merge or push.
+   */
+  function validateSyncable(x, kind) {
     if (!x || typeof x !== 'object' || Array.isArray(x)) return 'not an object';
     if ((x.v || SYNC_V) > SYNC_V) return `schema v${x.v} is newer than this client (v${SYNC_V})`;
     if (!Array.isArray(x.columns) || !x.columns.length) return 'no columns';
@@ -602,6 +706,53 @@ const BoardCore = (() => {
     if (x.tombstones !== undefined
       && (!x.tombstones || typeof x.tombstones !== 'object' || Array.isArray(x.tombstones))) {
       return 'tombstones is not an object';
+    }
+    const isMap = o => o && typeof o === 'object' && !Array.isArray(o);
+    if (x.members !== undefined) {
+      if (!Array.isArray(x.members)) return 'members is not an array';
+      for (const m of x.members) {
+        if (!m || !isStr(m.id) || typeof m.name !== 'string' || !m.name.trim()) return 'a member has no id or name';
+        if (m.color !== undefined && typeof m.color !== 'string') return 'a member color is not a string';
+        if (m.mt !== undefined && !isNum(m.mt)) return 'a member clock is not a number';
+      }
+    }
+    if (x.teams !== undefined) {
+      if (!Array.isArray(x.teams)) return 'teams is not an array';
+      for (const t of x.teams) {
+        if (!t || !isStr(t.id) || !isStr(t.ns) || !/^t-/.test(t.ns)) return 'a team has no id or namespace';
+        if (t.secret !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(t.secret)) return 'a team secret is malformed';
+        for (const k of ['joinMt', 'mt', 'memberMt']) if (t[k] !== undefined && !isNum(t[k])) return 'a team clock is not a number';
+      }
+    }
+    if (x.teamsLeft !== undefined) {
+      if (!isMap(x.teamsLeft)) return 'teamsLeft is not an object';
+      for (const v of Object.values(x.teamsLeft)) if (!isNum(v)) return 'a leave stamp is not a number';
+    }
+    if (x.machines !== undefined) {
+      if (!Array.isArray(x.machines)) return 'machines is not an array';
+      for (const m of x.machines) {
+        if (!m || !isStr(m.id) || typeof m.name !== 'string') return 'a computer has no id or name';
+        if (m.icon !== undefined && !ICONS.includes(m.icon)) return 'a computer icon is unknown';
+      }
+    }
+    if (x.privateSessions !== undefined) {
+      if (!isMap(x.privateSessions)) return 'privateSessions is not an object';
+      for (const v of Object.values(x.privateSessions)) if (!isMap(v) || typeof (v.session || '') !== 'string') return 'a private session is malformed';
+    }
+    if (kind === 'personal' && x.members !== undefined) return 'a roster cannot land on the personal board';
+    if (kind === 'team') {
+      if (!Array.isArray(x.members) || !x.members.length) return 'a team board needs its roster';
+      for (const k of ['teams', 'teamsLeft', 'machines', 'privateSessions']) {
+        if (x[k] !== undefined) return `${k} cannot land on a team board`;
+      }
+      // The session firewall: a resume command is private and only works on
+      // one computer. Team sessions live on each person's personal board; a
+      // team payload carrying one is a leak and is refused, never stripped.
+      // Presence, not truthiness: an empty `session: ""` is still a slot the
+      // team board must not have.
+      for (const t of x.tasks || []) {
+        if (t && ('session' in t || 'sessionMachine' in t || 'sessionCwd' in t)) return 'a session cannot land on a team board';
+      }
     }
     return null;
   }
@@ -755,6 +906,12 @@ const BoardCore = (() => {
 
     const cols = mergeLists(a.columns, b.columns, a.columnsMt || 0, b.columnsMt || 0, true);
     const projs = mergeLists(a.projects, b.projects, a.projectsMt || 0, b.projectsMt || 0, false);
+    // Computers merge like projects. Here the name dedupe is exactly right:
+    // two devices that each registered "MacBook" before syncing mean one
+    // computer, and the alias re-points every session that named the other.
+    const machs = (a.machines || b.machines)
+      ? mergeLists(a.machines, b.machines, a.machinesMt || 0, b.machinesMt || 0, false) : null;
+    const machAlias = id => (machs && id && machs.alias.has(id)) ? machs.alias.get(id) : id;
 
     const ofA = new Map((a.tasks || []).map(t => [t.id, t]));
     const ofB = new Map((b.tasks || []).map(t => [t.id, t]));
@@ -829,6 +986,69 @@ const BoardCore = (() => {
       }
     }
 
+    if (machs) {
+      const live = new Set(machs.items.map(m => m.id));
+      for (const t of tasks) {
+        if (!t.sessionMachine) continue;
+        t.sessionMachine = machAlias(t.sessionMachine);
+        // a deleted computer never becomes a wrong one: show none
+        if (!live.has(t.sessionMachine)) delete t.sessionMachine;
+      }
+    }
+
+    // Roster: union by id, rename by mt. No order vector and deliberately no
+    // name dedupe — two people who both join as "Ana" are two people.
+    const members = unionById(a.members, b.members, x => x.mt || 0);
+
+    // Teams you belong to. A leave is a tombstone; an entry survives only if
+    // its generation (joinMt) is newer. Within one generation, label and
+    // identity merge on their own clocks.
+    const teamsLeft = {};
+    for (const side of [a.teamsLeft, b.teamsLeft]) {
+      for (const [id, ts] of Object.entries(side || {})) teamsLeft[id] = Math.max(teamsLeft[id] || 0, ts || 0);
+    }
+    const teamIds = new Set([...(a.teams || []), ...(b.teams || [])].map(x => x.id));
+    const teamOf = (list, id) => (list || []).find(x => x.id === id);
+    const teams = [];
+    for (const id of [...teamIds].sort()) {
+      let x = teamOf(a.teams, id), y = teamOf(b.teams, id);
+      const gen = Math.max(x ? x.joinMt || 0 : 0, y ? y.joinMt || 0 : 0);
+      if (x && (x.joinMt || 0) < gen) x = null;
+      if (y && (y.joinMt || 0) < gen) y = null;
+      if (teamsLeft[id] != null && gen <= teamsLeft[id]) continue;
+      const pickBy = (clock, keys) => {
+        if (!x) return y; if (!y) return x;
+        const cx = x[clock] || 0, cy = y[clock] || 0;
+        if (cx !== cy) return cx > cy ? x : y;
+        const vx = canon(keys.map(k => x[k] ?? null)), vy = canon(keys.map(k => y[k] ?? null));
+        return vx >= vy ? x : y;
+      };
+      const base = deep(pickBy('mt', ['label', 'ns', 'secret']));
+      const who = pickBy('memberMt', ['memberId']);
+      base.memberId = who.memberId ?? null;
+      base.memberMt = who.memberMt || 0;
+      base.mt = Math.max(x ? x.mt || 0 : 0, y ? y.mt || 0 : 0);
+      base.joinMt = gen;
+      teams.push(base);
+    }
+
+    // Private sessions for team cards: per key, higher mt wins.
+    const privateSessions = {};
+    for (const side of [a.privateSessions, b.privateSessions]) {
+      for (const [k, v] of Object.entries(side || {})) {
+        const held = privateSessions[k];
+        if (!held || (v.mt || 0) > (held.mt || 0) || ((v.mt || 0) === (held.mt || 0) && canon(v) > canon(held))) {
+          privateSessions[k] = deep(v);
+        }
+      }
+    }
+    const liveMachines = machs ? new Set(machs.items.map(m => m.id)) : null;
+    for (const v of Object.values(privateSessions)) {
+      if (!v.sessionMachine) continue;
+      v.sessionMachine = machAlias(v.sessionMachine);
+      if (liveMachines && !liveMachines.has(v.sessionMachine)) delete v.sessionMachine; // never a wrong computer
+    }
+
     // The log only ever grows. A same-id collision is a rewriteDay conflict:
     // the stamped rewrite wins, a tie goes to the greater serialization.
     const events = new Map();
@@ -852,8 +1072,27 @@ const BoardCore = (() => {
       events: [...events.values()].map(deep)
         .sort((x, y) => (x.at || 0) - (y.at || 0) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)),
     };
+    // Team and computer data: set when present, removed when empty, so a v2
+    // board stays byte-identical and a local-only copy never lingers.
+    const setOrDrop = (key, value, empty) => { if (empty) delete out[key]; else out[key] = value; };
+    setOrDrop('members', members, !members.length);
+    setOrDrop('teams', teams, !teams.length);
+    setOrDrop('teamsLeft', Object.fromEntries(Object.entries(teamsLeft).sort(([p], [q]) => p < q ? -1 : 1)), !Object.keys(teamsLeft).length);
+    setOrDrop('privateSessions', Object.fromEntries(Object.entries(privateSessions).sort(([p], [q]) => p < q ? -1 : 1)), !Object.keys(privateSessions).length);
+    if (machs) { out.machines = deep(machs.items); out.machinesMt = machs.orderMt; }
     delete out.seed; // a merged board is never a replaceable first-run seed
     return out;
+  }
+
+  /** Union by id, higher clock wins, ties canonical; sorted by id. */
+  function unionById(aList, bList, clockOf) {
+    const byId = new Map();
+    for (const x of aList || []) byId.set(x.id, x);
+    for (const y of bList || []) {
+      const held = byId.get(y.id);
+      if (!held || clockOf(y) > clockOf(held) || (clockOf(y) === clockOf(held) && canon(y) > canon(held))) byId.set(y.id, y);
+    }
+    return [...byId.values()].sort((x, y) => x.id < y.id ? -1 : 1).map(x => JSON.parse(JSON.stringify(x)));
   }
 
   /**
@@ -928,6 +1167,21 @@ const BoardCore = (() => {
     return { token: bytesToB64u(new Uint8Array(tokenBits)), key };
   }
 
+  /**
+   * A team's identity, derived from its secret so every device that joins the
+   * same team computes the same id and namespace with no coordination. One
+   * way: it reveals nothing about the key. The full 128 bits go into the
+   * namespace; truncating would let two teams meet. docs/team.md.
+   */
+  async function teamIdOf(secret) {
+    const km = await crypto.subtle.importKey('raw', b64uToBytes(secret), 'HKDF', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits(
+      { name: 'HKDF', hash: 'SHA-256', salt: HKDF_SALT, info: new TextEncoder().encode('kanban.page team') }, km, 128);
+    return bytesToB64u(new Uint8Array(bits));
+  }
+  const teamNs = teamId => 't-' + teamId;
+  const isTeamNs = ns => typeof ns === 'string' && /^t-[A-Za-z0-9_-]{22}$/.test(ns);
+
   async function pipeBytes(bytes, stream) {
     const out = await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer();
     return new Uint8Array(out);
@@ -961,6 +1215,33 @@ const BoardCore = (() => {
   }
 
   /* ── storage ─────────────────────────────────────────── */
+
+  /** The forward guard: a board written by a newer release is never folded
+      into this one's model — `migrate` would rewrite its `v` and a save would
+      strip what it does not know. Checked before `migrate` on every read. */
+  const isFutureBoard = raw => !!raw && typeof raw === 'object' && typeof raw.v === 'number' && raw.v > SYNC_V;
+
+  /** What a backup file may carry. A backup travels (email, drives), so the
+      keys to other people's boards — and device-local bookkeeping — stay out. */
+  function exportable(st) {
+    const out = JSON.parse(JSON.stringify(st));
+    for (const k of ['teams', 'teamsLeft', 'teamsReqApplied', '_contentGen', '_bindingGen']) delete out[k];
+    return out;
+  }
+
+  /** Who moved a card into the done column, from the log: the last event
+      into that column by id that carries a `by`. Legacy events carry no
+      column ids and so never answer. Returns { by, byName, at } or null. */
+  function doneByOf(events, taskId, doneColumnId) {
+    let hit = null;
+    for (const e of events || []) {
+      if (e.taskId !== taskId || !e.by || !e.toColumnId) continue;
+      if (e.toColumnId === doneColumnId && e.fromColumnId !== doneColumnId) {
+        if (!hit || (e.at || 0) >= (hit.at || 0)) hit = e;
+      }
+    }
+    return hit ? { by: hit.by, byName: hit.byName || null, at: hit.at } : null;
+  }
 
   function defaultBoard(locale = 'en') {
     return {
@@ -1054,6 +1335,7 @@ const BoardCore = (() => {
     reindex, applyOrder, sortByProject, defaultBoard, migrate,
     mtOf, pmtOf, existMtOf, clockMax, canon, stampChanges, syncable, validateSyncable, SYNC_V, merge, unionFloor,
     randomSecret, deriveSync, seal, unseal, bytesToB64u, b64uToBytes,
+    hasV3Data, teamIdOf, teamNs, isTeamNs, isFutureBoard, exportable, doneByOf, ICONS,
   };
 })();
 

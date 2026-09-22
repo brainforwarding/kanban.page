@@ -16,7 +16,7 @@ const clone = x => JSON.parse(JSON.stringify(x));
 /* ── args ────────────────────────────────────────────── */
 
 const FLAGS = new Set(['--flag', '--no-flag', '--no-project', '--all', '--json', '--dry-run',
-  '--secret-stdin', '--store-plaintext', '--force', '--md']);
+  '--secret-stdin', '--store-plaintext', '--force', '--md', '--mine']);
 
 function parseArgs(argv) {
   const out = { _: [], opts: {} };
@@ -88,7 +88,7 @@ async function fetchBoard(opts) {
 /** build → stamp → floor → land. The only path that writes. */
 async function mutate(opts, build) {
   const { sel, key, relay, ver, state } = await fetchBoard(opts);
-  const built = build(state);
+  const built = build(state, sel);
 
   const out = { board: sel.name, ver, fingerprint: fmt.fingerprint(sel.name, state, ver) };
 
@@ -102,6 +102,10 @@ async function mutate(opts, build) {
   let next = built.state;
   C.stampChanges(prev, next);                 // the one place clocks are wound
   next = C.unionFloor(next, { events: state.events, tombstones: state.tombstones });
+  // The firewall, before anything leaves this machine: a team board never
+  // carries a session, and team and personal data never mix.
+  const bad = C.validateSyncable(C.syncable(next), ops.isTeam(next) ? 'team' : 'personal');
+  if (bad) throw new ops.OpError('usage', `refusing to write: ${bad}`);
 
   // The probe is this command's idempotency key: it recognises THIS change in a
   // head fetched later, so an ambiguous failure never re-runs the mutation.
@@ -116,29 +120,150 @@ async function mutate(opts, build) {
   return out;
 }
 
+/* ── identity and computers ──────────────────────────── */
+
+/** The member this CLI is on the selected board — stored beside the board's
+    config entry by `kanban whoami`, and only if the roster still has it. */
+function identity(sel, st) {
+  const entry = boards.readConfig().boards[sel.name];
+  const id = entry && entry.member;
+  return id ? (st.members || []).find(m => m.id === id) || null : null;
+}
+
+const normal = s => String(s || '').toLowerCase().replace(/\.local$/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** Which computer this is, for a session written from here: the stored
+    `here`, else the one computer whose name the hostname contains — only on
+    exactly one fit, and said out loud. */
+function thisComputer(sel, st) {
+  const entry = boards.readConfig().boards[sel.name] || {};
+  const list = st.machines || [];
+  if (entry.here && list.some(m => m.id === entry.here)) return { id: entry.here };
+  const hit = computerFromHostname(list, require('os').hostname());
+  if (hit) return { id: hit.id, note: `computer: ${hit.name} (from hostname)` };
+  return { id: null, note: list.length ? 'computer: unknown · run `kanban here "<this computer>"` once' : null };
+}
+
+/** `Sebastians-Mac-mini.local` → "Mac mini". Whole words only, and only when
+    exactly one computer fits; anything else is no answer, never a guess. */
+function computerFromHostname(list, hostname) {
+  const host = normal(hostname);
+  const hits = (list || []).filter(m => normal(m.name) && ` ${host} `.includes(` ${normal(m.name)} `));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** The personal board, for commands that write your private data: the one
+    `kanban here` was run on. Never guessed. */
+function personalBoardName(cfg) {
+  if (cfg.personal && cfg.boards[cfg.personal]) return cfg.personal;
+  return null;
+}
+
 /* ── commands ────────────────────────────────────────── */
 
 const CMDS = {};
 
-CMDS.add = async (args, opts) => mutate(opts, st => ops.add(st, {
+/** add/edit with --session: stamps the computer and the folder, or refuses on
+    a team board (one board per command — see `kanban session`). */
+async function withSession(opts, build) {
+  if (!opts.session) return mutate(opts, (st, sel) => build(st, {}, sel));
+  let note = null;
+  const res = await mutate(opts, (st, sel) => {
+    if (ops.isTeam(st)) return build(st, {}, sel); // ops refuse it with the hint
+    const pc = thisComputer(sel, st);
+    note = pc.note;
+    return build(st, { sessionMachine: pc.id, sessionCwd: process.cwd() }, sel);
+  });
+  if (note) res.note = note;
+  return res;
+}
+
+CMDS.add = async (args, opts) => withSession(opts, (st, s, sel) => ops.add(st, {
   title: args[0], notes: opts.notes, session: opts.session, project: opts.project,
   projectId: opts.projectId, stage: opts.stage, stageId: opts.stageId, flag: opts.flag,
+  me: meFor(sel, st), ...s,
 }));
 
-CMDS.mv = async (args, opts) => mutate(opts, st => ops.move(st, {
-  id: args[0], stage: args[1], stageId: opts.stageId,
+/** Identity for an attributed write; null when unknown (unattributed). */
+const meFor = (sel, st) => ops.isTeam(st) ? identity(sel, st) : null;
+
+CMDS.mv = async (args, opts) => mutate(opts, (st, sel) => ops.move(st, {
+  id: args[0], stage: args[1], stageId: opts.stageId, me: meFor(sel, st),
 }));
 
-CMDS.done = async (args, opts) => mutate(opts, st => ops.move(st, { id: args[0], done: true }));
+CMDS.done = async (args, opts) => mutate(opts, (st, sel) => ops.move(st, { id: args[0], done: true, me: meFor(sel, st) }));
+
+CMDS.whoami = async (args, opts) => {
+  const { sel, state } = await fetchBoard(opts);
+  if (!ops.isTeam(state)) throw new ops.OpError('usage', 'this board has no roster; identities belong to team boards');
+  if (!args[0] && !opts.memberId) {
+    const me = identity(sel, state);
+    return { read: me ? `you are ${me.name} on ${sel.name}` : `no identity on ${sel.name} · roster: ${state.members.map(m => m.name).join(', ')}` };
+  }
+  // picks an existing member; the CLI never creates one
+  const m = ops.resolveMember(state, args[0], opts.memberId);
+  const cfg = boards.readConfig();
+  cfg.boards[sel.name] = { ...(cfg.boards[sel.name] || {}), member: m.id };
+  boards.writeConfig(cfg);
+  return { read: `you are ${m.name} on ${sel.name}` };
+};
+
+CMDS.assign = async (args, opts) => mutate(opts, (st, sel) => ops.assign(st, {
+  id: args[0], to: args[1], memberId: opts.memberId, me: meFor(sel, st),
+}));
+
+CMDS.here = async (args, opts) => {
+  let made = null;
+  const res = await mutate(opts, st => { const b = ops.here(st, { name: args[0], icon: opts.icon, machineId: opts.machineId }); made = b.machine; return b; });
+  if (made && !opts.dryRun) {
+    const cfg = boards.readConfig();
+    const name = res.board;
+    cfg.boards[name] = { ...(cfg.boards[name] || {}), here: made.id };
+    cfg.personal = name; // the board that holds your computers is your personal board
+    boards.writeConfig(cfg);
+  }
+  res.read = made ? `this computer is ${made.name} · remembered for ${res.board}` : res.read;
+  return res;
+};
+
+/** A private session for a team card. Reads the team board, writes only the
+    personal board — one board per command, so a failure can never leave half
+    of it landed and a retry can never duplicate a card. */
+CMDS.session = async (args, opts) => {
+  const [cardId, command = ''] = args;
+  const team = await fetchBoard(opts);
+  if (!ops.isTeam(team.state)) {
+    throw new ops.OpError('usage', 'on a personal board, use `kanban edit <card> --session "<cmd>"`');
+  }
+  const t = ops.resolveTask(team.state, cardId, { archived: true });
+  const teamId = await C.teamIdOf(team.sel.secret);
+  const cfg = boards.readConfig();
+  const personal = personalBoardName(cfg);
+  if (!personal) {
+    throw new ops.OpError('usage', 'no personal board known. Run `kanban here "<this computer>" --board <personal>` once.');
+  }
+  let note = null;
+  const res = await mutate({ ...opts, board: personal, secretStdin: false }, (st, sel) => {
+    const pc = thisComputer(sel, st);
+    note = pc.note;
+    return ops.privateSession(st, {
+      teamId, taskId: t.id, title: t.title,
+      session: command.trim(), sessionMachine: command.trim() ? pc.id : null,
+      sessionCwd: command.trim() ? process.cwd() : null,
+    });
+  });
+  if (note) res.note = note;
+  return res;
+};
 
 CMDS.edit = async (args, opts) => {
   const fields = ['title', 'notes', 'session', 'project', 'projectId'];
   const given = fields.some(f => opts[f] !== undefined) || opts.flag || opts.noFlag || opts.noProject;
   if (!given) throw new ops.OpError('usage', 'edit needs at least one field: --title --notes --session --project/--no-project --flag/--no-flag');
-  return mutate(opts, st => ops.edit(st, {
+  return withSession(opts, (st, s) => ops.edit(st, {
     id: args[0], title: opts.title, notes: opts.notes, session: opts.session,
     project: opts.project, projectId: opts.projectId, noProject: opts.noProject,
-    flag: opts.flag ? true : opts.noFlag ? false : undefined,
+    flag: opts.flag ? true : opts.noFlag ? false : undefined, ...s,
   }));
 };
 
@@ -147,9 +272,15 @@ CMDS.restore = async (args, opts) => mutate(opts, st => ops.restore(st, { id: ar
 
 CMDS.ls = async (args, opts) => {
   const { sel, ver, state } = await fetchBoard(opts);
+  let mine = null;
+  if (opts.mine) {
+    const me = identity(sel, state);
+    if (!me) throw new ops.OpError('usage', '--mine needs to know who you are: run `kanban whoami <your name>` on this board');
+    mine = me.id;
+  }
   return {
     board: sel.name, ver, fingerprint: fmt.fingerprint(sel.name, state, ver),
-    read: fmt.list(state, { stage: opts.stage, project: opts.project, all: opts.all }),
+    read: fmt.list(state, { stage: opts.stage, project: opts.project, all: opts.all, mine }),
     tasks: opts.json ? ops.live(state).map(t => ({
       id: t.id, title: t.title, stage: ops.colName(state, t.columnId),
       project: ops.projectName(state, t), flag: !!t.flag, order: t.order,
@@ -170,8 +301,8 @@ CMDS.report = async (args, opts) => {
     const t = (state.tasks || []).find(x => x.id === id);
     return t ? { title: t.title, project: ops.projectName(state, t), archived: !!t.archivedAt } : null;
   };
-  const done = ops.doneStage(state).name;
-  const entries = C.aggregateWeek(state.events, monday, lookup, done);
+  const doneCol = ops.doneStage(state);
+  const entries = C.aggregateWeek(state.events, monday, lookup, { id: doneCol.id, name: doneCol.name });
   const locale = opts.locale || 'en';
   const read = opts.md
     ? C.toMarkdown(entries.filter(e => e.include), monday,
@@ -238,8 +369,12 @@ const USAGE = `kanban — headless client for a synced kanban.page board
   kanban mv <id> <stage>            kanban done <id>
   kanban edit <id> [--title T] [--notes N] [--session S] [--project P|--no-project] [--flag|--no-flag]
   kanban archive <id>               kanban restore <id>
-  kanban ls [--stage S] [--project P] [--all]
+  kanban ls [--stage S] [--project P] [--all] [--mine]
   kanban show <id>
+  kanban whoami [<name>] [--member-id ID]     who you are on a team board
+  kanban assign <id> <name|nobody>            hand a card to someone
+  kanban here "<computer>" [--icon laptop|desktop|mini|server]   on your personal board
+  kanban session <id> "<cmd>"                 your private session for a team card
   kanban report [--week YYYY-MM-DD] [--locale en|es] [--md]
   kanban board [ls|add <name>|replace <name>|default <name>|forget <name> --force]
 
@@ -262,6 +397,7 @@ async function main() {
   if (res.fingerprint) console.log(res.fingerprint);
   if (res.summary) console.log(fmt.summaryLine(res.summary));
   if (res.read) console.log(res.read);
+  if (res.note) console.log(res.note);
   if (res.noop) console.log('no change');
   else if (res.dryRun) console.log('dry run · nothing written');
   else if (res.newVer) console.log(`ok · ver ${res.newVer}${res.contended ? ' (merged a concurrent write)' : ''}`);
@@ -280,4 +416,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, parseArgs, mutate, CMDS, safeErrorLine };
+module.exports = { main, parseArgs, mutate, CMDS, safeErrorLine, computerFromHostname };

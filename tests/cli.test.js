@@ -189,10 +189,10 @@ test('a card already deleted at GET time is simply not found', async () => {
   assert.throws(() => ops.edit(head.payload, { id, title: 'x' }), /no card starting with/);
 });
 
-test('a v:3 head is refused and nothing is written', async () => {
+test('a head from a newer schema is refused and nothing is written', async () => {
   const ctx = await fixture();
   const future = clone(await ctx.fake.read());
-  future.v = 3;
+  future.v = C.SYNC_V + 1;
   await ctx.fake.seed(future);
   const verBefore = ctx.fake.ver;
   await assert.rejects(() => ctx.relay.head(ctx.key), /newer than this client/);
@@ -350,4 +350,95 @@ test('a board cannot be named over another board\'s backup slot', () => {
   // secret silently overwritten the next time "work" was replaced.
   assert.throws(() => boardsMod.addBoard('work.previous', 'A'.repeat(43)), /reserved/);
   assert.equal(boardsMod.previousOf('work'), 'work.previous');
+});
+
+/* ── team boards and computers (docs/team.md, docs/computers.md) ── */
+
+const { computerFromHostname } = require('../cli/kanban.js');
+const teamBoard = () => {
+  const b = C.defaultBoard('en');
+  b.members = [{ id: 'm1', name: 'Sebastián' }, { id: 'm2', name: 'Andrea' }];
+  return C.stampChanges(clone(C.defaultBoard('en')), b, 5000);
+};
+
+test('a move with an identity is attributed and carries column ids; without one it is not', () => {
+  const st = teamBoard();
+  const added = ops.add(st, { title: 'x', me: st.members[0] });
+  const e = added.state.events.at(-1);
+  assert.equal(e.by, 'm1');
+  assert.equal(e.byName, 'Sebastián');
+  assert.equal(e.toColumnId, st.columns[0].id);
+  const id = added.state.tasks[0].id;
+  const moved = ops.move(added.state, { id, done: true });
+  const m = moved.state.events.at(-1);
+  assert.ok(!('by' in m), 'unattributed without an identity, never guessed');
+  assert.equal(m.fromColumnId, st.columns[0].id);
+  assert.equal(m.toColumnId, st.columns.at(-1).id);
+});
+
+test('a session is refused on a team board, with the private-session hint', () => {
+  const st = teamBoard();
+  assert.throws(() => ops.add(st, { title: 'x', session: 'claude --resume a' }), /kanban session/);
+  const added = ops.add(st, { title: 'x' });
+  assert.throws(() => ops.edit(added.state, { id: added.state.tasks[0].id, session: 'codex resume b' }), /private/);
+});
+
+test('assign needs a team board and an identity, and records who assigned it', () => {
+  const st = teamBoard();
+  const added = ops.add(st, { title: 'x' }).state;
+  const id = added.tasks[0].id;
+  assert.throws(() => ops.assign(added, { id, to: 'Andrea' }), /whoami/);
+  const out = ops.assign(added, { id, to: 'andrea', me: added.members[0] });
+  const t = out.state.tasks[0];
+  assert.deepEqual([t.assigneeId, t.assignedBy], ['m2', 'm1']);
+  assert.ok(ops.assign(out.state, { id, to: 'Andrea', me: added.members[0] }).noop, 'same assignee is a no-op');
+  const cleared = ops.assign(out.state, { id, to: 'nobody', me: added.members[0] }).state.tasks[0];
+  assert.equal(cleared.assigneeId, null);
+  assert.throws(() => ops.assign(C.defaultBoard('en'), { id, to: 'x', me: { id: 'm1' } }), /team board/);
+});
+
+test('whoami resolution refuses an ambiguous name', () => {
+  const st = teamBoard();
+  st.members.push({ id: 'm3', name: 'Andrea' });
+  assert.throws(() => ops.resolveMember(st, 'Andrea'), /matches 2 members/);
+  assert.equal(ops.resolveMember(st, 'x', 'm3').id, 'm3');
+});
+
+test('here matches, creates, or refuses; never on a team board', () => {
+  const st = C.defaultBoard('en');
+  const made = ops.here(st, { name: 'Mac mini', icon: 'mini' });
+  assert.equal(made.machine.icon, 'mini');
+  const again = ops.here(made.state, { name: 'mac MINI' });
+  assert.ok(again.noop);
+  assert.equal(again.machine.id, made.machine.id);
+  assert.throws(() => ops.here(teamBoard(), { name: 'x' }), /personal board/);
+});
+
+test('the hostname names a computer only on exactly one whole-word fit', () => {
+  const list = [{ id: 'a', name: 'Mac mini' }, { id: 'b', name: 'MacBook' }];
+  assert.equal(computerFromHostname(list, 'Sebastians-Mac-mini.local').id, 'a');
+  assert.equal(computerFromHostname(list, 'sebastians-macbook-pro.local').id, 'b');
+  assert.equal(computerFromHostname(list, 'build-server'), null);
+  assert.equal(computerFromHostname([{ id: 'a', name: 'Mac' }, { id: 'b', name: 'Mac mini' }], 'my-mac-mini'), null, 'two fits is no answer');
+});
+
+test('a private session lands on the personal board keyed to the team card, and clears to nothing', () => {
+  const st = C.defaultBoard('en');
+  const put = ops.privateSession(st, { teamId: 'T', taskId: 't1', title: 'x', session: 'claude --resume a', sessionMachine: 'k', sessionCwd: '/w' });
+  const key = JSON.stringify(['T', 't1']);
+  assert.deepEqual(put.state.privateSessions[key], { session: 'claude --resume a', sessionMachine: 'k', sessionCwd: '/w' });
+  const cleared = ops.privateSession(put.state, { teamId: 'T', taskId: 't1', title: 'x', session: '' });
+  assert.deepEqual(cleared.state.privateSessions[key], { session: '' }, 'no path survives a clear');
+  assert.throws(() => ops.privateSession(teamBoard(), { teamId: 'T', taskId: 't', session: 's' }), /personal board/);
+});
+
+test('ls --mine lists only my cards, and cards name their assignee', () => {
+  const fmt = require('../cli/format.js');
+  let st = teamBoard();
+  st = ops.add(st, { title: 'mine' }).state;
+  st = ops.assign(st, { id: st.tasks[0].id, to: 'Sebastián', me: st.members[0] }).state;
+  st = ops.add(st, { title: 'theirs' }).state;
+  const out = fmt.list(st, { mine: 'm1' });
+  assert.match(out, /mine\s+@Sebastián/);
+  assert.doesNotMatch(out, /theirs/);
 });

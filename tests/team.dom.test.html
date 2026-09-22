@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>team — running…</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 16px; }
+  iframe { width: 1200px; height: 700px; border: 1px solid #ccc; }
+  li b { display: inline-block; width: 42px; }
+  .why { color: #c33; display: block; margin-left: 42px; }
+</style>
+</head>
+<body>
+<p id="sum">running…</p>
+<ol id="out"></ol>
+<iframe id="app" src="about:blank"></iframe>
+<script>
+/* Team boards and computers, end to end, through the real app.
+   docs/team.md, docs/computers.md. Namespaces are all scratch: two personal
+   boards (tt = Sebastián's, tt2 = Andrea's) pinned with ?home=, so nothing
+   here reads or writes the real personal board. The relay is an in-memory
+   fake the app finds through window.__kanbanTestRelay (app.js test seam). */
+
+const results = [];
+const out = document.getElementById('out');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function record(name, error) {
+  results.push({ name, ok: !error, error: error ? String(error.message || error) : null });
+  const li = document.createElement('li');
+  li.innerHTML = `<b>${error ? 'FAIL' : 'PASS'}</b>${name}` + (error ? `<span class="why">${String(error.message || error)}</span>` : '');
+  out.append(li);
+}
+async function test(name, fn) { try { await fn(); record(name); } catch (err) { record(name, err); } }
+function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
+function eq(a, b, msg) { if (a !== b) throw new Error(`${msg || ''} expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`); }
+
+/* ── the fake relay: optimistic concurrency, like relay/worker.js ── */
+const slots = new Map(); // token → { ver, env }
+const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+window.__kanbanTestRelay = {
+  async fetch(url, opts = {}) {
+    const auth = (opts.headers && (opts.headers.Authorization || opts.headers.authorization)) || '';
+    const token = auth.replace(/^Bearer /, '');
+    const slot = slots.get(token);
+    const method = opts.method || 'GET';
+    if (method === 'GET') return slot ? json(slot) : json({ error: 'none' }, 404);
+    if (method === 'PUT') {
+      const { baseVer, env } = JSON.parse(opts.body);
+      if ((slot ? slot.ver : 0) !== baseVer) return json(slot, 409);
+      const next = { ver: (slot ? slot.ver : 0) + 1, env };
+      slots.set(token, next);
+      return json({ ver: next.ver });
+    }
+    return json({}, 405);
+  },
+};
+async function relayBoard(secret) {
+  const C = W.BoardCore;
+  const keys = await C.deriveSync(secret);
+  const slot = slots.get(keys.token);
+  return slot ? C.unseal(keys.key, slot.env) : null;
+}
+
+const frame = document.getElementById('app');
+let W, D;
+async function go(search, hash = '') {
+  frame.src = `/index.html${search}${hash}`;
+  await new Promise(r => frame.addEventListener('load', r, { once: true }));
+  W = frame.contentWindow; D = W.document;
+  await sleep(250);
+}
+const home = (h = 'tt') => `?ns=${h}&home=${h}`;
+const teamUrl = (ns, h = 'tt') => `?ns=${ns}&home=${h}`;
+async function until(cond, ms = 3000, msg = 'timed out') {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (await cond()) return; await sleep(40); }
+  throw new Error(msg);
+}
+const ls = () => frame.contentWindow.localStorage;
+const reqKeys = h => Object.keys(ls()).filter(k => k.startsWith(`board.req.${h}.`));
+const typeWho = name => {
+  const input = D.querySelector('#who-list input');
+  input.value = name;
+  input.dispatchEvent(new W.Event('input', { bubbles: true }));
+};
+
+let teamNs = null, teamSecret = null, cardId = null;
+/* Two people in one browser share every namespace, so each "device" keeps its
+   own copy of the team board's storage and swaps it in before its turn. */
+const devices = { seb: null, andrea: null };
+let current = 'seb';
+function become(who) {
+  if (who === current) return;
+  const keys = [`board.v2.${teamNs}`, `board.sync.${teamNs}`];
+  devices[current] = Object.fromEntries(keys.map(k => [k, ls().getItem(k)]));
+  keys.forEach(k => ls().removeItem(k));
+  const held = devices[who];
+  if (held) for (const [k, v] of Object.entries(held)) if (v != null) ls().setItem(k, v);
+  current = who;
+}
+
+(async () => {
+  await go(home());
+  for (const k of Object.keys(ls())) if (/^(board\.(v2|sync|req|read)\.(tt|t-)|kanban\.here\.tt|board\.v2\.tt2|board\.sync\.tt2|board\.req\.tt2)/.test(k)) ls().removeItem(k);
+  await go(home());
+
+  await test('a personal board shows the switcher and no team UI', async () => {
+    eq(D.querySelector('#sw-label').textContent, 'Personal');
+    assert(D.querySelector('#members').hidden, 'no roster, no avatars');
+    assert(!D.querySelector('.pill.mine'), 'no Mine pill');
+  });
+
+  await test('New team board asks who you are, requires a name, then syncs with the roster', async () => {
+    const nav = new Promise(r => frame.addEventListener('load', r, { once: true }));
+    W.newTeamBoard();
+    await nav; W = frame.contentWindow; D = W.document; await sleep(300);
+    teamNs = new URLSearchParams(W.location.search).get('ns');
+    assert(W.BoardCore.isTeamNs(teamNs), 'navigated to a derived team namespace');
+    assert(!D.querySelector('#whoami').hidden, 'Who are you? is open');
+    assert(D.querySelector('#who-join').disabled, 'Join waits for a name');
+    typeWho('Sebastián');
+    assert(!D.querySelector('#who-join').disabled, 'a name enables Join');
+    D.querySelector('#who-join').click();
+    await until(() => W.__board.sync && W.__board.sync.ver > 0, 3000, 'first push never landed');
+    teamSecret = W.__board.sync.secret;
+    eq(W.BoardCore.teamNs(await W.BoardCore.teamIdOf(teamSecret)), teamNs, 'the namespace is derived from the secret');
+    const remote = await relayBoard(teamSecret);
+    eq(remote.v, 3, 'a team board is v3 on the wire');
+    eq(remote.members.length, 1);
+    eq(remote.members[0].name, 'Sebastián');
+    assert(!('me' in remote), 'who I am never travels');
+    assert(reqKeys('tt').length >= 1, 'a join request waits for the personal board');
+  });
+
+  await test('the personal board ingests the join and forgets the request', async () => {
+    await go(home());
+    const teams = W.__board.state.teams || [];
+    eq(teams.length, 1, 'one team entry');
+    eq(teams[0].ns, teamNs);
+    eq(teams[0].secret, teamSecret);
+    eq(reqKeys('tt').length, 0, 'acknowledged requests are deleted');
+    W.openBoardsMenu();
+    assert([...D.querySelectorAll('#boardsMenu .bm-label')].some(b => b.textContent === 'Team'), 'the switcher lists the team');
+    W.closeBoardsMenu();
+  });
+
+  await test('teams follow you: a device that never opened the team adopts it, already you', async () => {
+    const meBefore = JSON.parse(ls().getItem(`board.v2.${teamNs}`)).me;
+    ls().removeItem(`board.v2.${teamNs}`);
+    ls().removeItem(`board.sync.${teamNs}`);
+    await go(teamUrl(teamNs));
+    await until(() => W.__board.sync && (W.__board.state.members || []).length, 3000, 'did not adopt');
+    assert(D.querySelector('#whoami').hidden, 'no Who are you? — the entry knows');
+    eq(W.__board.state.me, meBefore, 'identity came from the teams entry');
+  });
+
+  await test('a second person joins through the link and picks a new name', async () => {
+    await go('?ns=tt2&home=tt2');
+    become('andrea');
+    await go(teamUrl(teamNs, 'tt2'), `#sync=${teamSecret}`);
+    await until(() => !D.querySelector('#whoami').hidden, 3000, 'Who are you? did not open');
+    const names = [...D.querySelectorAll('.who-row .who-name')].map(n => n.textContent);
+    assert(names.includes('Sebastián'), 'the roster is listed');
+    D.querySelector('.who-row.add').click();
+    typeWho('sebastián');
+    D.querySelector('#who-join').click();
+    await sleep(60);
+    assert(!D.querySelector('#whoami').hidden, 'a duplicate name selects the existing row instead of joining');
+    D.querySelector('.who-row.add').click();
+    typeWho('Andrea');
+    D.querySelector('#who-join').click();
+    await sleep(80);
+    eq(W.__board.state.members.length, 2);
+    eq(W.me().name, 'Andrea');
+    await W.push();
+    eq((await relayBoard(teamSecret)).members.length, 2, 'the roster reached the relay');
+  });
+
+  await test('Andrea assigns a card to Sebastián; the event and the field carry who', async () => {
+    const seb = W.__board.state.members.find(m => m.name === 'Sebastián');
+    W.openEditor(null);
+    D.querySelector('#f-title').value = 'Rate-limit the webhook endpoint';
+    [...D.querySelectorAll('#f-assignee .pill')].find(b => b.textContent.includes('Sebastián')).click();
+    W.saveEditor();
+    await sleep(200);
+    const t = W.__board.state.tasks.find(x => x.title === 'Rate-limit the webhook endpoint');
+    cardId = t.id;
+    eq(t.assigneeId, seb.id);
+    eq(t.assignedBy, W.me().id);
+    const e = W.__board.state.events.find(x => x.taskId === t.id);
+    eq(e.by, W.me().id, 'created by Andrea');
+    eq(e.toColumnId, W.__board.state.columns[0].id, 'with the column id');
+    assert(!('session' in t), 'a team card has no session slot at all');
+    assert(D.querySelector(`.card[data-id="${t.id}"] .av`), 'the card shows the assignee');
+    await W.push();
+  });
+
+  await test('Sebastián sees it as new, on the card and on the Mine pill; opening clears it', async () => {
+    await go(home());
+    become('seb');
+    await go(teamUrl(teamNs));
+    await W.pull(); await sleep(150);
+    const card = D.querySelector(`.card[data-id="${cardId}"]`);
+    assert(card && card.classList.contains('fresh'), 'marked new');
+    assert(D.querySelector('.pill.mine .newcount'), 'the Mine pill counts it');
+    W.openEditor(cardId);
+    W.closeEditor();
+    await sleep(200);
+    assert(!D.querySelector(`.card[data-id="${cardId}"]`).classList.contains('fresh'), 'seen');
+  });
+
+  await test('you can rename yourself; old events keep the old name', async () => {
+    const before = W.__board.state.events.filter(e => e.by === W.__board.state.me).map(e => e.byName);
+    W.openWho('join');
+    const mine = [...D.querySelectorAll('.who-row')].find(r => r.getAttribute('aria-pressed') === 'true');
+    mine.click();
+    const input = D.querySelector('#who-list input[data-rename]');
+    assert(input, 'your row became a text field');
+    input.value = 'Seba';
+    input.dispatchEvent(new W.Event('input', { bubbles: true }));
+    D.querySelector('#who-join').click();
+    await sleep(80);
+    eq(W.me().name, 'Seba');
+    assert(W.__board.state.events.filter(e => e.by === W.__board.state.me).every((e, i) => e.byName === before[i]), 'history untouched');
+    W.me().name = 'Sebastián'; W.save(); W.render(); await sleep(150);
+  });
+
+  await test('Mine and Unassigned filter the board', async () => {
+    W.addTask({ title: 'Nobody owns this', columnId: W.__board.state.columns[0].id });
+    await sleep(150);
+    D.querySelector('.pill.mine').click(); await sleep(50);
+    assert(W.cards ? true : true);
+    let titles = [...D.querySelectorAll('.card h3')].map(h => h.textContent);
+    assert(titles.includes('Rate-limit the webhook endpoint') && !titles.includes('Nobody owns this'), 'Mine');
+    [...D.querySelectorAll('.pill')].find(p => p.textContent.startsWith('Unassigned')).click(); await sleep(50);
+    titles = [...D.querySelectorAll('.card h3')].map(h => h.textContent);
+    assert(!titles.includes('Rate-limit the webhook endpoint') && titles.includes('Nobody owns this'), 'Unassigned');
+    D.querySelector('#filters .pill').click(); await sleep(50); // All
+  });
+
+  await test('a session on a team card stays private: never on the team board', async () => {
+    W.openEditor(cardId);
+    D.querySelector('#f-session').value = 'claude --resume 9c1e77aa-3f02';
+    D.querySelector('#f-session').dispatchEvent(new W.Event('input', { bubbles: true }));
+    W.saveEditor();
+    await sleep(250);
+    const t = W.__board.state.tasks.find(x => x.id === cardId);
+    assert(!t.session, 'the team task holds no session');
+    assert(D.querySelector(`.card[data-id="${cardId}"] .chip`), 'but I see my chip');
+    await W.push();
+    const remote = await relayBoard(teamSecret);
+    assert(!JSON.stringify(remote).includes('9c1e77aa'), 'the relay never saw it');
+    assert(reqKeys('tt').length >= 1, 'queued for the personal board');
+  });
+
+  await test('moving it across the done line marks the card with who did it', async () => {
+    const done = W.__board.state.columns.at(-1);
+    const t = W.__board.state.tasks.find(x => x.id === cardId);
+    const from = t.columnId;
+    t.columnId = done.id; t.order = -1;
+    W.logEvent(t, 'moved', from, done.id);
+    W.save(); W.render(); await sleep(200);
+    const mark = D.querySelector(`.card[data-id="${cardId}"] .doneby`);
+    assert(mark && mark.textContent.includes('S'), 'done-by mark');
+    const e = W.__board.state.events.at(-1);
+    eq(e.by, W.me().id);
+    await W.push();
+  });
+
+  await test('the teammate sees who finished it', async () => {
+    await go('?ns=tt2&home=tt2');
+    become('andrea');
+    await go(teamUrl(teamNs, 'tt2'));
+    await W.pull(); await sleep(150);
+    const mark = D.querySelector(`.card[data-id="${cardId}"] .doneby`);
+    assert(mark, 'Andrea sees the done-by mark');
+    const t = W.__board.state.tasks.find(x => x.id === cardId);
+    assert(!W.privateSessionFor(cardId), 'and not Sebastián\'s session');
+    assert(!t.session);
+  });
+
+  await test('the team payload firewall refuses a session outright', async () => {
+    const leaked = JSON.parse(JSON.stringify(W.BoardCore.syncable(W.__board.state)));
+    leaked.tasks[0].session = 'claude --resume leak';
+    assert(W.BoardCore.validateSyncable(leaked, 'team'), 'refused');
+  });
+
+  await test('the personal report is my week across boards, tagged, one export', async () => {
+    await go(home());
+    become('seb');
+    await go(home());
+    const k = JSON.stringify([teamNs.slice(2), cardId]);
+    assert(W.__board.state.privateSessions && W.__board.state.privateSessions[k].session.includes('9c1e77aa'), 'private session ingested');
+    W.addTask({ title: 'Personal thing', columnId: W.__board.state.columns[0].id });
+    await sleep(150);
+    W.openReport(); await sleep(60);
+    const monday = W.BoardCore.mondayOf(W.BoardCore.ymd());
+    if (W.__board.repWeek !== monday) { W.__board.repWeek = monday; W.renderReport(true); }
+    await sleep(100);
+    const entries = W.__board.repEntries;
+    const team = entries.find(e => e.taskId === cardId);
+    assert(team, 'the team card I finished is in my week');
+    eq(team.boardLabel, 'Team');
+    eq(team.tense, 'shipped');
+    eq(team.doneBy, W.__board.state.teams[0].memberId, 'I crossed the done line');
+    assert(entries.find(e => e.title === 'Personal thing'), 'personal rows too');
+    assert(!entries.find(e => e.title === 'Nobody owns this' && e.ns === teamNs && !e.byIds.includes(W.__board.state.teams[0].memberId)), 'only my rows from the team');
+    assert(D.querySelector('.rep-row .rtag'), 'the Team tag is shown');
+    // the tick is the only filter: tick the team row, then export
+    [...D.querySelectorAll('.rep-row')].find(r => r.textContent.includes('Rate-limit the webhook endpoint')).click();
+    const md = W.reportMarkdown();
+    assert(md.includes('Rate-limit the webhook endpoint') && !md.includes('Team'), 'one export, untagged');
+    W.closeReport();
+  });
+
+  await test('leaving a team leaves everywhere; Undo rejoins', async () => {
+    await go(teamUrl(teamNs));
+    W.leaveTeam();
+    await sleep(50);
+    eq(W.__board.sync, null, 'disconnected here, board kept');
+    D.querySelector('#toast-undo').click();
+    await sleep(200);
+    assert(W.__board.sync && W.__board.sync.secret === teamSecret, 'Undo reconnected');
+    await go(home());
+    eq((W.__board.state.teams || []).length, 1, 'rejoin wins over the leave it undid');
+    eq(reqKeys('tt').length, 0, 'both records acknowledged — the leave cannot replay');
+    await go(home());
+    eq((W.__board.state.teams || []).length, 1, 'still joined after a reload');
+  });
+
+  await test('a team link pasted on the personal board joins in its own namespace', async () => {
+    await go(home());
+    const nav = new Promise(r => frame.addEventListener('load', r, { once: true }));
+    W.presentCandidateWhenSettled(teamSecret);
+    await nav; await sleep(100);
+    eq(new URLSearchParams(frame.contentWindow.location.search).get('ns'), teamNs, 'routed to the team namespace');
+    W = frame.contentWindow; D = W.document;
+    await go(home());
+    assert(!(W.__board.state.members || []).length, 'the personal board never took the roster');
+  });
+
+  await test('computers: add one, it becomes here, and a pasted session lands on it', async () => {
+    await go(home());
+    W.openComputers();
+    D.querySelector('#comp-name').value = 'Mac mini';
+    D.querySelector('#comp-add').dispatchEvent(new W.Event('submit', { cancelable: true }));
+    await sleep(50);
+    const m = W.__board.state.machines[0];
+    eq(m.icon, 'mini', 'the icon guessed from the name');
+    eq(W.hereId(), m.id, 'the first computer is here');
+    W.closeComputers();
+    W.openEditor(null);
+    D.querySelector('#f-title').value = 'Resume me';
+    D.querySelector('#f-session').value = 'codex resume 019a4f2b';
+    D.querySelector('#f-session').dispatchEvent(new W.Event('input', { bubbles: true }));
+    assert(!D.querySelector('#f-machine').hidden, 'the picker appears with a session');
+    W.saveEditor();
+    await sleep(200);
+    const t = W.__board.state.tasks.find(x => x.title === 'Resume me');
+    eq(t.sessionMachine, m.id);
+    assert(D.querySelector(`.card[data-id="${t.id}"] .mach.here`), 'the chip names the computer, in full ink');
+    eq(W.BoardCore.syncable(W.__board.state).v, 3, 'computers make the personal board v3');
+  });
+
+  await test('export leaves team secrets behind; import keeps current teams', async () => {
+    const exported = W.BoardCore.exportable(W.__board.state);
+    assert(!('teams' in exported) && !JSON.stringify(exported).includes(teamSecret), 'no secret in a backup');
+    const kept = W.keepMembership(JSON.parse(JSON.stringify(exported)), W.__board.state);
+    eq(kept.teams.length, 1, 'importing it would keep the team');
+  });
+
+  for (const k of Object.keys(ls())) if (/^(board\.(v2|sync|req|read)\.(tt|t-)|kanban\.here\.tt|board\.v2\.tt2|board\.sync\.tt2|board\.req\.tt2)/.test(k)) ls().removeItem(k);
+  const failed = results.filter(r => !r.ok);
+  const sum = `${results.length - failed.length} passed · ${failed.length} failed`;
+  document.getElementById('sum').textContent = sum;
+  document.title = failed.length ? `FAIL ${sum}` : `PASS ${sum}`;
+  window.__results = results;
+})();
+</script>
+</body>
+</html>

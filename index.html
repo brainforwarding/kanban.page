@@ -26,9 +26,15 @@
 <header class="rail">
   <a class="brand" href="../" title="kanban.page"><span class="blink"></span>kanban.page</a>
 
+  <div class="boardsw" id="boardsw">
+    <span class="slash">/</span>
+    <button class="sw-btn" id="sw-btn" aria-haspopup="true" aria-expanded="false"><span id="sw-label"></span></button>
+  </div>
+
   <div class="filters" id="filters"></div>
 
   <div class="tools">
+    <button class="members" id="members" hidden></button>
     <label class="search" id="searchWrap">
       <input id="q" type="text" placeholder="Search" spellcheck="false" autocomplete="off">
     </label>
@@ -55,14 +61,24 @@
       <div class="chooser" id="f-project"></div>
     </div>
 
-    <div class="field">
+    <div class="field" id="assigneeField" hidden>
+      <span class="lbl" id="assigneeLabel">Assignee</span>
+      <div class="chooser" id="f-assignee"></div>
+    </div>
+
+    <div class="field" id="sessionField">
       <span class="lbl" id="sessionLabel">Session</span>
-      <div class="cmd-input" id="f-session-wrap">
-        <span class="caret">&#9656;</span>
-        <input id="f-session" type="text" spellcheck="false" autocomplete="off" placeholder="claude --resume 2d2bb76b-…">
-        <button class="icon sm" id="f-session-copy" title="Copy"></button>
+      <div class="session-line">
+        <div class="cmd-input" id="f-session-wrap">
+          <span class="caret">&#9656;</span>
+          <input id="f-session" type="text" spellcheck="false" autocomplete="off" placeholder="claude --resume 2d2bb76b-…">
+          <button class="icon sm" id="f-session-copy" title="Copy"></button>
+        </div>
+        <button class="machine-pick" id="f-machine" hidden aria-haspopup="true"></button>
       </div>
     </div>
+
+    <div class="history" id="f-history" hidden></div>
   </div>
 
   <footer class="sheet-foot">
@@ -101,6 +117,36 @@
 </section>
 
 <div class="menu weeks" id="weeks" hidden></div>
+<div class="menu boards-menu" id="boardsMenu" hidden></div>
+<div class="menu machines-menu" id="machineMenu" hidden></div>
+
+<!-- who are you: the one new step on a team board -->
+<section class="sheet whoami" id="whoami" hidden role="dialog" aria-modal="true" aria-labelledby="whoTitle">
+  <header class="sheet-head"><button class="icon sm" id="who-close"></button></header>
+  <div class="sheet-body">
+    <h2 class="who-title" id="whoTitle">Who are you?</h2>
+    <div class="who-list" id="who-list"></div>
+  </div>
+  <footer class="sheet-foot">
+    <button class="ghost" id="who-back">Back</button>
+    <span class="grow"></span>
+    <button class="primary" id="who-join">Join</button>
+  </footer>
+</section>
+
+<!-- computers: where each session lives -->
+<aside class="panel" id="computers" hidden role="dialog" aria-modal="true" aria-label="Computers">
+  <header class="panel-head">
+    <h2>Computers</h2>
+    <button class="icon" data-close></button>
+  </header>
+  <div class="panel-body" id="comp-list"></div>
+  <form class="panel-foot" id="comp-add">
+    <input id="comp-name" type="text" placeholder="New computer" spellcheck="false" autocomplete="off">
+    <button class="primary sm" type="submit">Add</button>
+  </form>
+  <p class="comp-cli" id="comp-cli"></p>
+</aside>
 
 <!-- projects -->
 <aside class="panel" id="projects" hidden role="dialog" aria-modal="true" aria-label="Projects">
@@ -205,6 +251,7 @@
 <div class="menu" id="menu" hidden>
   <button data-act="projects">Projects<kbd>P</kbd></button>
   <button data-act="archive">Archive<kbd>A</kbd></button>
+  <button data-act="computers" id="act-computers">Computers</button>
   <button data-act="theme">Toggle theme<kbd>T</kbd></button>
   <button data-act="density" id="act-density" aria-pressed="false">Compact cards<span class="tick">&#10003;</span><kbd>D</kbd></button>
   <hr>
@@ -215,6 +262,7 @@
   <button data-act="export">Export backup</button>
   <button data-act="import">Import backup</button>
   <button data-act="sync" id="act-sync" aria-pressed="false">Sync devices<span class="tick">&#10003;</span></button>
+  <button data-act="leave" id="act-leave" class="danger" hidden>Leave team</button>
   <hr>
   <div class="menu-label" id="languageLabel">Language</div>
   <div role="group" aria-label="Language" id="languageChoices">

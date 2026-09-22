@@ -38,9 +38,39 @@ try { locale = I.valid(localStorage.getItem(LOCALE_KEY)); } catch (err) { /* Eng
 const tr = (key, vars) => I.t(locale, key, vars);
 
 // ?ns=… gives a board its own storage. Tests use it; so can a scratch board.
-const NS = new URLSearchParams(location.search).get('ns');
+const PARAMS = new URLSearchParams(location.search);
+const NS = PARAMS.get('ns');
 const KEY = NS ? `board.v2.${NS}` : 'board.v2';
 const LEGACY_KEY = NS ? null : 'board.v1';
+
+/* Board kind (docs/team.md). A team board lives in a namespace derived from
+   its secret (t-…); every other board is personal-kind. Personal and team
+   data never mix, and validation is told which one it is guarding.
+   HOME is the personal board this page belongs to — normally the null
+   namespace. Tests pin it with ?home= so a scratch run never reads, queues
+   against or reports from the real personal board. */
+const IS_TEAM = C.isTeamNs(NS);
+const KIND = IS_TEAM ? 'team' : 'personal';
+const TEAM_ID = IS_TEAM ? NS.slice(2) : null;
+const HOME = PARAMS.get('home');
+const HOME_KEY = HOME ? `board.v2.${HOME}` : 'board.v2';
+const HOME_SYNC_KEY = HOME ? `board.sync.${HOME}` : 'board.sync';
+const IS_HOME = !IS_TEAM && (NS || null) === (HOME || null);
+const REQ_PREFIX = HOME ? `board.req.${HOME}.` : 'board.req.';
+const HERE_KEY = HOME ? `kanban.here.${HOME}` : 'kanban.here';
+const boardUrl = ns => {
+  const q = new URLSearchParams();
+  if (ns) q.set('ns', ns);
+  else if (HOME) q.set('ns', HOME);
+  if (HOME) q.set('home', HOME);
+  const qs = q.toString();
+  return location.pathname + (qs ? `?${qs}` : '');
+};
+
+/* The forward guard. A board written by a newer release is shown but never
+   saved or synced from here: migrate() would rewrite its `v` and a save would
+   strip what this release does not know. */
+let readOnly = false;
 
 // Device-local generations never travel through syncable(). Content answers
 // "merge or replace this tab's board?"; binding answers "which sync engine may
@@ -67,6 +97,10 @@ const bindingGenOf = st => localGen(st, '_bindingGen');
 function firstRun() {
   const s = C.defaultBoard(locale);
   s.seed = true;
+  // A team namespace starts bare: it is either about to adopt a linked board
+  // or to become a new team, and a demo card with a session would be exactly
+  // what the session firewall refuses.
+  if (IS_TEAM) return s;
   const now = Date.now();
   const t = {
     id: C.uid(),
@@ -82,7 +116,7 @@ function firstRun() {
   };
   s.tasks.push(t);
   s.events.push(C.makeEvent(
-    { taskId: t.id, title: t.title, type: 'created', from: null, to: s.columns[1].name },
+    { taskId: t.id, title: t.title, type: 'created', from: null, to: s.columns[1].name, toColumnId: s.columns[1].id },
     { now }
   ));
   return s;
@@ -95,6 +129,7 @@ function load() {
   } catch (err) {
     console.warn('board: could not read storage —', err);
   }
+  if (C.isFutureBoard(raw)) readOnly = true;
   return raw ? C.migrate(raw) : firstRun();
 }
 
@@ -125,7 +160,7 @@ function applyLocale() {
   $('#proj-name').placeholder = tr('newProject'); $('#proj-add button').textContent = tr('add');
   $('#archive').setAttribute('aria-label', tr('archive')); $('#archive h2').textContent = tr('archive');
   $('#arch-empty').textContent = tr('deleteAll');
-  const menuText = { projects: tr('projects'), archive: tr('archive'), theme: tr('theme'), addcol: tr('addStage'), sortproj: tr('sortProject'), export: tr('export'), import: tr('import'), sync: tr('syncDevices') };
+  const menuText = { projects: tr('projects'), archive: tr('archive'), theme: tr('theme'), addcol: tr('addStage'), sortproj: tr('sortProject'), export: tr('export'), import: tr('import'), sync: tr('syncDevices'), computers: tr('computers'), leave: tr('leaveTeam') };
   $('#syncTitle').textContent = tr('sync');
   $('[data-close]', $('#sync')).title = tr('close');
   $('#sync-copy').title = tr('copy');
@@ -166,6 +201,7 @@ let saveTimer = null;
 let lastStamped = clone(state);
 
 function writeStateNow() {
+  if (readOnly) return false;
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
     return true;
@@ -177,6 +213,7 @@ function writeStateNow() {
 }
 
 function installLocalState(next) {
+  if (readOnly) return false;
   const migrated = C.migrate(next);
   try {
     localStorage.setItem(KEY, JSON.stringify(migrated));
@@ -256,6 +293,9 @@ function applyExternal(rawJson) {
   let raw = null;
   try { raw = JSON.parse(rawJson); } catch (err) { return; }
   if (!raw) return;
+  // A newer tab wrote this board. Folding it into this model would downgrade
+  // it; stop editing here instead and let the update prompt do its job.
+  if (C.isFutureBoard(raw)) { enterReadOnly(); return; }
   const external = C.migrate(raw);
   const contentCmp = compareGen(contentGenOf(external), contentGenOf(state));
   const bindingCmp = compareGen(bindingGenOf(external), bindingGenOf(state));
@@ -285,6 +325,7 @@ function applyExternal(rawJson) {
   if (!panel.hidden) renderProjects();
   if (!archiveEl.hidden) renderArchive();
   if (!reportEl.hidden) renderReport(false);
+  clearOrphanSessions();
 
   const differs = C.canon(C.syncable(state)) !== C.canon(C.syncable(external))
     || !sameGen(contentGenOf(state), contentGenOf(external))
@@ -315,6 +356,10 @@ function flushExternal() {
 window.addEventListener('storage', e => {
   if (e.key === KEY && e.newValue != null) applyExternal(e.newValue);
   if (e.key === SYNC_KEY) reconcileStoredSync();
+  // The personal board is the registry: requests land there, and every other
+  // page follows what it says (membership, identity, computers).
+  if (IS_HOME && e.key && e.key.startsWith(REQ_PREFIX) && e.newValue != null) ingestRequests();
+  if (!IS_HOME && (e.key === HOME_KEY || (e.key && e.key.startsWith(REQ_PREFIX)))) { followTeamEntry(); render(); }
 });
 
 /* ── device sync ───────────────────────────────────────────
@@ -327,6 +372,17 @@ window.addEventListener('storage', e => {
    explicit Join/Replace is the only path that replaces local board data. */
 
 const RELAY = 'https://kanban-relay.quiet-bush-25b1.workers.dev';
+
+/* Test seam, like window.__board: tests/team.dom.test.html drives several
+   namespaces through page navigations, and a freshly loaded page talks to the
+   relay before any override could be installed. When — and only when — this
+   page is framed by a same-origin harness that provides a fake relay, every
+   relay call goes there. Unframed, or framed cross-origin, this is inert. */
+const testRelay = (() => {
+  try { return window.parent !== window ? window.parent.__kanbanTestRelay || null : null; }
+  catch (err) { return null; }
+})();
+const relayHttp = (url, opts) => (testRelay ? testRelay.fetch : window.fetch)(url, opts);
 const SYNC_KEY = NS ? `board.sync.${NS}` : 'board.sync';
 
 let sync = null;        // { secret, ver } — presence = the feature is on
@@ -349,11 +405,20 @@ let watchSock = null, watchRetry = 0;
 let uiDragLock = 0;     // column and project-row drags hold this
 let syncRuntimeEpoch = 0;
 let syncBindingSuspended = false;
+let syncIncompatible = false; // the remote head can never be applied here
 
 try {
   const held = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null');
-  if (held && sameGen(bindingGenOf(held), bindingGenOf(state))) sync = held;
+  if (held && !readOnly && sameGen(bindingGenOf(held), bindingGenOf(state))) sync = held;
 } catch (err) { /* off */ }
+
+function enterReadOnly() {
+  if (readOnly) return;
+  readOnly = true;
+  clearTimeout(saveTimer);
+  if (sync) suspendSyncRuntime();
+  toast(tr('needsUpdate'), null, 10000);
+}
 
 const captureSync = () => sync ? {
   epoch: syncRuntimeEpoch,
@@ -482,7 +547,7 @@ async function keysForContext(ctx) {
 async function relayFetch(method, body, opts = {}, ctx = captureSync()) {
   if (!ctx) throw new Error('sync stopped');
   const derived = await keysForContext(ctx);
-  return fetch(`${RELAY}/v1/board`, {
+  return relayHttp(`${RELAY}/v1/board`, {
     method,
     headers: {
       Authorization: `Bearer ${derived.token}`,
@@ -519,7 +584,17 @@ const normalized = payload => C.canon(C.syncable(C.merge(payload, payload)));
     replace, deferred while the interaction barrier is up. */
 function applyRemote(remote, ver, ctx = captureSync()) {
   if (!isCurrentSync(ctx)) return;
-  if (C.validateSyncable(remote)) { setSyncStatus('error'); return; } // a newer app, or a damaged payload
+  // A newer app, a damaged payload, or the other kind of board. Validation
+  // knows which kind this namespace is: a roster never lands on a personal
+  // board, and a team board never accepts a session or a team list.
+  const bad = C.validateSyncable(remote, KIND);
+  if (bad) {
+    setSyncStatus('error');
+    // Terminal, not a retry loop: nothing this release can do will make a
+    // newer schema or the wrong kind of board acceptable.
+    if (/newer than this client|cannot land|needs its roster/.test(bad)) syncIncompatible = true;
+    return;
+  }
   floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
   if (syncBusy()) { pendingRemote = { remote, ver, ctx }; return; }
   sync.ver = ver;
@@ -539,6 +614,7 @@ function applyRemote(remote, ver, ctx = captureSync()) {
     if (!reportEl.hidden) renderReport(false);
   }
   save(); // persist the union; schedules a push-back only if we knew more
+  clearOrphanSessions();
   const current = syncableStr(state);
   setSyncStatus(current === rejectedPayload && current !== remoteHead ? 'error' : 'ok');
   syncedAt = Date.now();
@@ -583,6 +659,7 @@ function retrySyncNow() {
 async function push(opts = {}) {
   const ctx = captureSync();
   if (!isCurrentSync(ctx)) return;
+  if (readOnly || syncIncompatible) { setSyncStatus('error'); return; }
   if (pushing) { schedulePush(600); return; }
   if (pendingRemote) { schedulePush(1000); return; } // merge the held remote first
   // Never blind-write over a head this session has not seen: the floor is
@@ -597,6 +674,9 @@ async function push(opts = {}) {
     state = C.unionFloor(state, floor);
     lastStamped = clone(state);
   }
+  // Nothing leaves this device unless it is a valid board of this kind — the
+  // session firewall and the personal/team split, checked on the way out too.
+  if (C.validateSyncable(C.syncable(state), KIND)) { setSyncStatus('error'); return; }
   if (syncableStr(state) === rejectedPayload) { setSyncStatus('error'); return; }
   if (syncableStr(state) === remoteHead) {
     joiningOrder = false; // nothing to send: the adoption has settled too
@@ -682,6 +762,9 @@ async function pull() {
     if (!isCurrentSync(ctx)) return;
     const remote = await C.unseal(key, env);
     if (!isCurrentSync(ctx)) return;
+    // every decrypted head is validated, whatever its version says
+    const badHead = C.validateSyncable(remote, KIND);
+    if (badHead) { setSyncStatus('error'); if (/newer than this client|cannot land|needs its roster/.test(badHead)) syncIncompatible = true; return; }
     syncedAt = Date.now();
     if (ver !== sync.ver) {
       applyRemote(remote, ver, ctx);
@@ -724,6 +807,7 @@ function connectWatch() {
     if (!isCurrentSync(ctx) || watchSock) return;
     let ws;
     try {
+      if (testRelay) return; // the harness drives pulls itself
       ws = new WebSocket(`${RELAY.replace(/^http/, 'ws')}/v1/board/watch`, ['kanban.v1', token]);
     } catch (err) { return; }
     watchSock = ws;
@@ -787,12 +871,16 @@ window.addEventListener('pagehide', () => {
 
 /* ── sync lifecycle ───────────────────────────────────── */
 
-async function enableSync() {
+/** `secret` is pre-minted only for a new team board: its namespace was
+    derived from it before the page existed (docs/team.md). */
+async function enableSync(secret = null) {
+  // A team board reaches the wire only with its roster (board kind).
+  if (IS_TEAM && !(state.members || []).length) return false;
   suspendSyncRuntime();
   state._bindingGen = nextGen(bindingGenOf(state));
   lastStamped = clone(state);
   if (!writeStateNow()) return false;
-  sync = { secret: C.randomSecret(), ver: 0, _bindingGen: clone(bindingGenOf(state)) };
+  sync = { secret: secret || C.randomSecret(), ver: 0, _bindingGen: clone(bindingGenOf(state)) };
   syncKeys = null;
   remoteHead = '';
   rejectedPayload = '';
@@ -887,7 +975,7 @@ function reflectExternalBinding(secret) {
 
 const permanentCandidateError = message => Object.assign(new Error(message), { permanent: true });
 const candidateBoardShape = raw => {
-  if (!raw || typeof raw !== 'object' || (raw.v || 2) > 2) return false;
+  if (!raw || typeof raw !== 'object' || (raw.v || 2) > C.SYNC_V) return false;
   if (!Array.isArray(raw.columns) || !raw.columns.length
       || !raw.columns.every(c => c && typeof c.id === 'string' && typeof c.name === 'string')) return false;
   if (!Array.isArray(raw.projects)
@@ -927,7 +1015,7 @@ async function inspectCandidate(secret) {
     if (attempt !== joinAttempt || sync) return;
     let res;
     try {
-      res = await fetch(`${RELAY}/v1/board`, {
+      res = await relayHttp(`${RELAY}/v1/board`, {
         method: 'GET',
         headers: { Authorization: `Bearer ${keys.token}` },
       });
@@ -952,6 +1040,9 @@ async function inspectCandidate(secret) {
     catch (err) { throw permanentCandidateError('cannot decrypt'); }
     if (attempt !== joinAttempt || sync) return;
     if (!candidateBoardShape(raw)) throw permanentCandidateError('bad board');
+    // the other kind of board never lands here (routing already moved a team
+    // board to its own namespace; this is the backstop)
+    if (C.validateSyncable(raw, KIND)) throw permanentCandidateError('bad board');
     let remote;
     try { remote = C.migrate(raw); }
     catch (err) { throw permanentCandidateError('bad board'); }
@@ -1014,6 +1105,7 @@ function commitCandidate(mode) {
   focusSyncState();
   connectWatch();
   if (mode === 'combine' && syncableStr(state) !== remoteHead) schedulePush(0);
+  afterTeamAdoption();
 }
 
 const byId = id => state.tasks.find(t => t.id === id);
@@ -1023,6 +1115,7 @@ const colName = id => (state.columns.find(c => c.id === id) || {}).name || '';
 /** The report's source of truth. Stage names are snapshotted, never referenced. */
 function logEvent(task, type, fromColId, toColId) {
   const p = projectOf(task);
+  const who = me();
   state.events.push(C.makeEvent({
     taskId: task.id,
     title: task.title,
@@ -1030,6 +1123,11 @@ function logEvent(task, type, fromColId, toColId) {
     type,
     from: fromColId ? colName(fromColId) : null,
     to: colName(toColId),
+    // ids beside the names, and who — only on a team board, only when known
+    fromColumnId: fromColId || null,
+    toColumnId: toColId,
+    by: who ? who.id : null,
+    byName: who ? who.name : null,
   }, { asOf: state.asOf }));
 }
 
@@ -1174,6 +1272,8 @@ const archivedTasks = () => state.tasks.filter(t => t.archivedAt);
 
 function visible(t) {
   if (state.filter && t.projectId !== state.filter) return false;
+  if (IS_TEAM && state.assigneeFilter === 'mine' && t.assigneeId !== state.me) return false;
+  if (IS_TEAM && state.assigneeFilter === 'unassigned' && t.assigneeId) return false;
   if (state.flagFilter && !t.flag) return false;
   if (!query) return true;
   const p = projectOf(t);
@@ -1189,6 +1289,8 @@ const tasksIn = colId => state.tasks
 function render() {
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.dataset.density = state.density;
+  renderSwitcher();
+  renderMembers();
   renderFilters();
   flip(renderBoard);
 }
@@ -1199,10 +1301,13 @@ function renderFilters() {
   filtersEl.innerHTML = '';
   const all = document.createElement('button');
   all.className = 'pill';
-  all.setAttribute('aria-pressed', String(!state.filter && !state.flagFilter));
+  all.setAttribute('aria-pressed', String(!state.filter && !state.flagFilter && !(IS_TEAM && state.assigneeFilter)));
   all.textContent = tr('all'); // no dot: the dot means "a project", and All is not one
-  all.onclick = () => { state.filter = null; state.flagFilter = false; save(); render(); };
+  all.onclick = () => { state.filter = null; state.flagFilter = false; state.assigneeFilter = null; save(); render(); };
   filtersEl.append(all);
+  // Mine / Unassigned compose with a project filter; they are preferences
+  // of this device and never sync.
+  assigneePills().forEach(pill => filtersEl.append(pill));
 
   // The ★ chip is pinned beside All so a long project list can never scroll
   // it out of reach — but no standing chrome: it only exists while something
@@ -1325,25 +1430,38 @@ function cardEl(t) {
   if (p) el.style.setProperty('--c', p.color);
 
   const since = age(t.updatedAt);
+  // A team card's session is yours alone, read from the personal board.
+  const sess = IS_TEAM ? privateSessionFor(t.id) : (t.session ? t : null);
+  const assignee = IS_TEAM ? memberOf(t.assigneeId) : null;
+  const doneCol = state.columns[state.columns.length - 1];
+  // who moved it across the done line — from the log, by column id
+  const doneBy = IS_TEAM && t.columnId === doneCol.id ? C.doneByOf(state.events, t.id, doneCol.id) : null;
+  const doneWho = doneBy ? (memberOf(doneBy.by) || { name: doneBy.byName || '?' }) : null;
+  const fresh = isNewForMe(t);
+  if (fresh) el.classList.add('fresh');
 
   el.innerHTML = `
     <span class="edge"></span>
     <button class="flag" title="${t.flag ? 'Unflag' : 'Flag  F'}" aria-pressed="${t.flag ? 'true' : 'false'}">${t.flag ? ICON.starFill : ICON.star}</button>
+    ${fresh ? `<span class="newtag">${esc(tr('newForYou'))}</span>` : ''}
     <h3>${esc(t.title)}</h3>
     ${t.notes ? `<p class="note">${esc(t.notes)}</p>` : ''}
-    ${p || since ? `<div class="meta">
+    ${p || since || assignee || doneWho ? `<div class="meta">
         ${p ? `<span class="proj">${esc(p.name)}</span>` : ''}
         <span class="grow"></span>
-        ${since ? `<span class="age" title="Untouched for ${since}">${since}</span>` : ''}
+        ${doneWho ? `<span class="doneby" title="${esc(doneWho.name)}">✓ ${esc(initials(doneWho.name))} · ${esc(age(doneBy.at) || tr('today'))}</span>` : ''}
+        ${since && !doneWho ? `<span class="age" title="Untouched for ${since}">${since}</span>` : ''}
+        ${assignee ? avatarHtml(assignee, 'sm') : ''}
       </div>` : ''}
-    ${t.session ? `<button class="chip" title="Copy session command">
+    ${sess ? `<button class="chip" title="Copy session command">
         <span class="caret">&#9656;</span>
-        <span class="cmd">${esc(t.session)}</span>
+        <span class="cmd">${esc(sess.session)}</span>
+        ${sess.sessionMachine ? machineHtml(sess.sessionMachine) : ''}
         <span class="ci">${ICON.copy}</span>
       </button>` : ''}`;
 
   const chip = $('.chip', el);
-  if (chip) chip.onclick = e => { e.stopPropagation(); copyChip(chip, t.session); };
+  if (chip) chip.onclick = e => { e.stopPropagation(); copyChip(chip, sessionCommand(sess)); };
   $('.flag', el).onclick = e => { e.stopPropagation(); toggleFlag(t.id); };
 
   el.addEventListener('keydown', e => {
@@ -1351,7 +1469,7 @@ function cardEl(t) {
     if (e.key === 'Enter') { e.preventDefault(); openEditor(t.id); }
     if (e.key === 'f') { e.preventDefault(); toggleFlag(t.id); }
     if (e.altKey && e.key.startsWith('Arrow')) { e.preventDefault(); nudge(t.id, e.key); }
-    if (e.key === 'c' && chip) { e.preventDefault(); copyChip(chip, t.session); }
+    if (e.key === 'c' && chip) { e.preventDefault(); copyChip(chip, sessionCommand(sess)); }
   });
 
   return el;
@@ -1412,6 +1530,8 @@ function addTask(patch) {
     session: '', flag: state.flagFilter || false, columnId: state.columns[0].id,
     order: 0, createdAt: now, updatedAt: now, ...patch,
   };
+  // A team card has no session slot at all — the firewall checks presence.
+  if (IS_TEAM) { delete t.session; delete t.sessionMachine; delete t.sessionCwd; }
   state.tasks.filter(x => x.columnId === t.columnId).forEach(x => x.order += 1);
   t.order = 0;
   state.tasks.push(t);
@@ -1975,11 +2095,24 @@ function openEditor(id, colId) {
   draft = t ? clone(t) : {
     title: '', notes: '', projectId: state.filter || null, session: '',
     flag: state.flagFilter || false, columnId: colId || state.columns[0].id,
+    ...(IS_TEAM && state.assigneeFilter === 'mine' && state.me ? { assigneeId: state.me } : {}),
   };
+  if (IS_TEAM) {
+    // the team task never holds a session; the editor shows yours
+    const mine = t ? privateSessionFor(t.id) : null;
+    draft.session = mine ? mine.session : '';
+    draft.sessionMachine = mine ? mine.sessionMachine || null : null;
+    draft.sessionCwd = mine ? mine.sessionCwd || null : null;
+    if (t) markSeen(t);
+  }
 
   fTitle.value = draft.title;
   fNotes.value = draft.notes || '';
   fSession.value = draft.session || '';
+  // Private on a team board: the lock takes the command caret's place.
+  $('#f-session-wrap .caret').innerHTML = IS_TEAM ? `<span class="lock" title="${esc(tr('private'))}">${LOCK_ICON}</span>` : '&#9656;';
+  renderAssignee();
+  renderMachinePick();
   $('#f-archive').style.visibility = t ? 'visible' : 'hidden';
   $('#f-close').title = tr('discard');
   renderStage();
@@ -1988,6 +2121,7 @@ function openEditor(id, colId) {
 
   scrim.hidden = false;
   editor.hidden = false;
+  renderHistory();
   autogrow(fTitle);
   requestAnimationFrame(() => fTitle.focus());
 }
@@ -2040,27 +2174,59 @@ function saveEditor() {
   draft.title = fTitle.value.trim();
   draft.notes = fNotes.value.trim();
   draft.session = fSession.value.trim();
+  if (!draft.session) { draft.sessionMachine = null; draft.sessionCwd = null; }
 
   if (!draft.title) { closeEditor(); return; }
 
+  // Team board: the session firewall. The command, its computer and its
+  // folder are pulled off the draft and written to your personal board after
+  // the editor settles — the team task never carries them.
+  let priv = null;
+  if (IS_TEAM) {
+    const before = editing !== 'new' ? privateSessionFor(editing) : null;
+    const next = { session: draft.session, sessionMachine: draft.sessionMachine || null, sessionCwd: draft.sessionCwd || null };
+    if ((before ? before.session : '') !== next.session || (before && before.sessionMachine) !== next.sessionMachine) priv = next;
+    delete draft.session; delete draft.sessionMachine; delete draft.sessionCwd;
+    const held = editing !== 'new' ? byId(editing) : null;
+    if ((held ? held.assigneeId || null : null) !== (draft.assigneeId || null)) {
+      if (!me()) draft.assigneeId = held ? held.assigneeId || null : null; // assigning needs an identity
+      else { draft.assignedBy = me().id; draft.assignedAt = Date.now(); }
+    }
+  } else {
+    if (!draft.sessionMachine) delete draft.sessionMachine;
+    if (!draft.sessionCwd) delete draft.sessionCwd;
+  }
+
+  let savedId = null;
   if (editing === 'new') {
-    addTask(draft);
+    savedId = addTask(draft).id;
   } else {
     const t = byId(editing);
     if (t) {
       const from = t.columnId;
       const moved = C.shouldLogMove(from, draft.columnId);
       Object.assign(t, draft, { updatedAt: Date.now() });
+      if (IS_TEAM) { delete t.session; delete t.sessionMachine; delete t.sessionCwd; }
+      if (!IS_TEAM && !draft.sessionMachine) delete t.sessionMachine;
+      if (!IS_TEAM && !draft.sessionCwd) delete t.sessionCwd;
       if (moved) {
         t.order = -1;
         resequence(t.columnId);
         logEvent(t, 'moved', from, t.columnId);
       }
+      savedId = t.id;
     }
     save();
     render();
   }
   closeEditor();
+  // After the barrier lifts (closeEditor applies held remote changes): a card
+  // deleted meanwhile gets no private session — a session edit must never be
+  // what resurrects it.
+  if (priv && savedId && byId(savedId)) {
+    enqueue('session', privKey(savedId), priv);
+    render();
+  }
 }
 
 function closeEditor() {
@@ -2068,6 +2234,7 @@ function closeEditor() {
   editing = null;
   draft = null;
   syncScrim();
+  if (seenChanged) { seenChanged = false; render(); }
   flushExternal(); // the editor was a sync barrier; apply what it held back
 }
 
@@ -2077,7 +2244,7 @@ $('#f-close').onclick = closeEditor;   // the deliberate discard, now labelled
 fFlag.onclick = () => { draft.flag = !draft.flag; syncFlagBtn(); popStar($('svg', fFlag), draft.flag); };
 $('#f-session-copy').onclick = async () => {
   if (!fSession.value.trim()) return;
-  const ok = await copyText(fSession.value.trim());
+  const ok = await copyText(sessionCommand({ ...draft, session: fSession.value.trim() }));
   const wrap = $('#f-session-wrap');
   const btn = $('#f-session-copy');
   if (!ok) return;
@@ -2609,7 +2776,9 @@ function renderSync() {
     const link = syncLink();
     $('#sync-scan').textContent = tr('syncScanLine');
     $('#sync-url').value = link;
-    $('#sync-warn').textContent = tr('syncWarning');
+    // once the personal board carries team secrets, its link reaches them too
+    $('#sync-warn').textContent = IS_HOME && (state.teams || []).length
+      ? `${tr('syncWarning')} ${tr('personalLinkTeams')}` : tr('syncWarning');
     $('#sync-cli-summary').textContent = tr('syncCli');
     $('#sync-cli-say').textContent = tr('syncCliSay');
     // The link is never interpolated here: it is a password, and this block is
@@ -2710,7 +2879,7 @@ $('#sync-join').onsubmit = e => {
     location.assign(`${location.pathname}${parsed.search}#sync=${parsed.secret}`);
     return;
   }
-  inspectCandidate(parsed.secret);
+  presentCandidateWhenSettled(parsed.secret);
 };
 
 $('#sync-replace').onclick = () => commitCandidate('replace');
@@ -2812,6 +2981,8 @@ menu.addEventListener('click', e => {
   if (act === 'export') exportBackup();
   if (act === 'import') $('#importFile').click();
   if (act === 'sync') openSync(null, $('#menuBtn'));
+  if (act === 'computers') openComputers();
+  if (act === 'leave') leaveTeam();
 });
 
 // The menu is the only place that names the last stage, so label it live.
@@ -2825,6 +2996,8 @@ $('#menuBtn').addEventListener('click', () => {
   // The one place sync has standing presence: without it, someone who paired
   // three months ago has no way to learn this board leaves the machine.
   $('#act-sync').setAttribute('aria-pressed', String(!!sync));
+  $('#act-computers').hidden = IS_TEAM;
+  $('#act-leave').hidden = !IS_TEAM || !teamEntry() && !sync;
 });
 
 function toggleTheme() {
@@ -2842,7 +3015,8 @@ function toggleDensity() {
 }
 
 function exportBackup() {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  // A backup travels; team secrets and device bookkeeping stay home.
+  const blob = new Blob([JSON.stringify(C.exportable(state), null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `board-${new Date().toISOString().slice(0, 10)}.json`;
@@ -2857,8 +3031,13 @@ $('#importFile').addEventListener('change', async e => {
   try {
     const next = JSON.parse(await file.text());
     if (!Array.isArray(next.columns) || !Array.isArray(next.tasks)) throw new Error('shape');
+    if (C.isFutureBoard(next) || readOnly) throw new Error('newer');
+    // a backup never carries team secrets (exportable), and a file from the
+    // other kind of board cannot be imported over this one
+    for (const k of ['teams', 'teamsLeft', 'teamsReqApplied']) delete next[k];
+    if (C.validateSyncable({ ...next, v: 2 }, KIND)) throw new Error('kind');
     snapshot(!sync);
-    const incoming = C.migrate(next); // also upgrades a v1 backup on the way in
+    const incoming = keepMembership(C.migrate(next), state); // also upgrades a v1 backup on the way in
     // While synced, importing MERGES. A replace would push a snapshot that
     // shrinks the relay's event log — and the log is the only copy of the
     // history, so no import may be able to truncate it for every device.
@@ -2957,10 +3136,22 @@ function snapshot(replacesBoard = false) {
   undoReplacesBoard = replacesBoard;
 }
 
+/* Team membership and private sessions are never rolled back by a board
+   snapshot: an import, or undoing one, must not drop a team you joined in the
+   meantime or bring back one you left (docs/team.md). Leave has its own Undo,
+   which is a rejoin request. */
+const KEEP_ACROSS_SNAPSHOTS = ['teams', 'teamsLeft', 'teamsReqApplied', 'privateSessions'];
+function keepMembership(next, from) {
+  for (const k of KEEP_ACROSS_SNAPSHOTS) {
+    if (from[k] !== undefined) next[k] = clone(from[k]); else delete next[k];
+  }
+  return next;
+}
+
 function undo() {
   if (!undoSnap) return;
   const replacement = undoReplacesBoard;
-  const next = undoSnap;
+  const next = keepMembership(undoSnap, state);
   undoSnap = null;
   undoReplacesBoard = false;
   if (replacement) {
@@ -2999,7 +3190,8 @@ function hideToast() {
 
 function syncScrim() {
   const was = scrim.hidden;
-  scrim.hidden = editor.hidden && panel.hidden && reportEl.hidden && archiveEl.hidden && syncEl.hidden;
+  scrim.hidden = editor.hidden && panel.hidden && reportEl.hidden && archiveEl.hidden && syncEl.hidden
+    && $('#whoami').hidden && $('#computers').hidden;
   // A scrim that has just appeared has not been pressed yet. See below.
   if (was && !scrim.hidden) scrimPressed = false;
 }
@@ -3054,6 +3246,8 @@ document.addEventListener('paste', e => {
   e.preventDefault();
   openEditor(null);
   fSession.value = line;
+  draft.sessionMachine = hereId(); // pasted here, so it lives here
+  renderMachinePick();
   fTitle.focus();
 });
 
@@ -3068,6 +3262,10 @@ document.addEventListener('keydown', e => {
     if (!panel.hidden) { closeProjects(); return; }
     if (!archiveEl.hidden) { closeArchive(); return; }
     if (!syncEl.hidden) { closeSync(); return; }
+    if (!boardsMenu.hidden) { closeBoardsMenu(); return; }
+    if (!machineMenu.hidden) { closeMachineMenu(); return; }
+    if (!compPanel.hidden) { closeComputers(); return; }
+    if (!whoEl.hidden) { if (whoMode !== 'create') closeWho(); return; }
     closeComposer();
     return;
   }
@@ -3129,13 +3327,16 @@ function defaultWeek() {
 function openReport() {
   closeComposer();
   repSelByWeek.clear();
+  reportFresh.clear();
   repWeek = defaultWeek();
   reportEl.hidden = false;
   scrim.hidden = false;
   renderReport(true);
+  freshenReport();
 }
 
 function closeReport() {
+  reportAttempt++; // a late read-only fetch is inert once the report closes
   reportEl.hidden = true;
   weeksEl.hidden = true;
   $('#rep-week').setAttribute('aria-expanded', 'false');
@@ -3153,11 +3354,19 @@ function lookupTask(taskId) {
   return { title: t.title, project: p ? p.name : null, archived: !!t.archivedAt };
 }
 
-const selected = () => repEntries.filter(e => repSel.has(e.taskId));
+const selected = () => repEntries.filter(e => repSel.has(e.rowKey));
+
+/** Every board this report reads, freshest copy first: this one, then the
+    personal board and your teams (docs/team.md → my week). */
+function reportBoards() {
+  const srcs = reportSources().map(src => ({ ...src, board: reportFresh.get(src.ns) || src.board }));
+  return srcs.filter(src => src.board && src.board.columns);
+}
+const reportEvents = () => [state.events, ...reportBoards().map(src => src.board.events || [])].flat();
 
 /** Weeks you can reach: first activity through this week. */
 function weekBounds() {
-  const weeks = C.weeksWithActivity(state.events, C.ymd());
+  const weeks = C.weeksWithActivity(reportEvents(), C.ymd());
   return weeks.length
     ? { first: weeks[weeks.length - 1].monday, last: weeks[0].monday }
     : { first: repWeek, last: repWeek };
@@ -3171,15 +3380,25 @@ function goWeek(monday) {
 }
 
 function renderReport(reset) {
-  const done = state.columns[state.columns.length - 1].name;
-  repEntries = C.aggregateWeek(state.events, repWeek, lookupTask, done);
+  const doneCol = state.columns[state.columns.length - 1];
+  const done = doneCol.name;
+  // This board first, as ever; on a team board only your rows. Then the
+  // other boards, each aggregated alone against its own done column — boards
+  // are never merged into one log.
+  repEntries = rowsFrom(state, NS || null, IS_TEAM ? teamLabel(teamEntry()) : null, IS_TEAM ? state.me : null);
+  if (IS_TEAM && !state.me) repEntries = [];
+  for (const src of reportBoards()) {
+    repEntries = repEntries.concat(rowsFrom(src.board, src.ns, src.label, src.me));
+  }
+  repEntries.forEach(e => { e.active = (e.ns || null) === (NS || null); });
 
   // Selections live per week, so stepping away and back does not silently
-  // throw away a partial pick.
-  const known = new Set(repEntries.map(e => e.taskId));
+  // throw away a partial pick. Keyed by board and card: a task id on two
+  // boards is two rows and can never tick the wrong one.
+  const known = new Set(repEntries.map(e => e.rowKey));
   let sel = repSelByWeek.get(repWeek);
   if (!sel) {
-    sel = new Set(repEntries.filter(e => e.include).map(e => e.taskId));
+    sel = new Set(repEntries.filter(e => e.include).map(e => e.rowKey));
     repSelByWeek.set(repWeek, sel);
   } else {
     [...sel].forEach(id => { if (!known.has(id)) sel.delete(id); });
@@ -3191,9 +3410,18 @@ function renderReport(reset) {
   const thisWeek = C.mondayOf(C.ymd());
   const rel = repWeek === thisWeek ? tr('thisWeek')
     : repWeek === C.addDays(thisWeek, -7) ? tr('lastWeek') : null;
+  // A team copy the report tried and failed to refresh says how old it is.
+  const staleSrc = reportSources().find(src => src.label && reportStale.has(src.ns));
+  let stale = null;
+  if (staleSrc) {
+    const at = Number(readJson(`board.read.${staleSrc.ns || ''}`)) || 0;
+    stale = at ? tr('teamStale', { time: new Intl.DateTimeFormat('en-GB', { timeZone: C.TZ, hour: '2-digit', minute: '2-digit' }).format(at) }) : tr('teamOffline');
+  }
+  const finished = repEntries.filter(e => e.to === e.done).length;
+  const summary = reportSources().length ? summaryAcross(repEntries, finished) : C.summaryLine(repEntries, done, locale);
   $('#rep-sum').textContent = repEntries.length
-    ? [rel, C.summaryLine(repEntries, done, locale)].filter(Boolean).join(' · ')
-    : (rel || '');
+    ? [rel, summary, stale].filter(Boolean).join(' · ')
+    : [rel, stale].filter(Boolean).join(' · ');
 
   const body = $('#rep-body');
   body.innerHTML = '';
@@ -3201,7 +3429,7 @@ function renderReport(reset) {
   if (!repEntries.length) {
     body.innerHTML = `<p class="rep-empty">${tr('nothingMoved')}</p>`;
   } else {
-    const order = state.projects.map(p => p.name);
+    const order = reportProjectOrder();
     // Grouped by tense, exactly as the export is, so you can see which section
     // a row will land in before deciding to tick it. Project order still sorts
     // within a section.
@@ -3235,11 +3463,31 @@ function syncRepFoot() {
   $('#rep-save').disabled = !exportable;
 }
 
+/** Project order across boards: the personal board's, then team-only names. */
+function reportProjectOrder() {
+  const personal = IS_TEAM ? (homeBoard().projects || []) : state.projects;
+  const order = personal.map(p => p.name);
+  const extra = new Set();
+  repEntries.forEach(e => { if (e.project && !order.includes(e.project)) extra.add(e.project); });
+  return [...order, ...[...extra].sort((a, b) => a.localeCompare(b))];
+}
+function summaryAcross(entries, finished) {
+  const n = entries.length;
+  const es = locale === 'es';
+  const created = entries.filter(e => e.created).length;
+  const parts = [es ? `${n} ${n === 1 ? 'tarjeta' : 'tarjetas'}` : `${n} card${n === 1 ? '' : 's'}`];
+  if (created) parts.push(es ? `${created} cread${created === 1 ? 'a' : 'as'}` : `${created} created`);
+  if (finished) parts.push(es ? `${finished} finalizada${finished === 1 ? '' : 's'}` : `${finished} finished`);
+  return parts.join(' · ');
+}
+
 function reportRow(e) {
-  const p = state.projects.find(x => x.name === e.project);
+  const personalProjects = IS_TEAM ? (homeBoard().projects || []) : state.projects;
+  const p = personalProjects.find(x => x.name === e.project) || state.projects.find(x => x.name === e.project);
   const row = document.createElement('div');
-  row.className = 'rep-row' + (repSel.has(e.taskId) ? ' on' : '') + (e.netZero ? ' zero' : '');
-  if (p) row.style.setProperty('--c', p.color);
+  row.className = 'rep-row' + (repSel.has(e.rowKey) ? ' on' : '') + (e.netZero ? ' zero' : '');
+  const color = p ? p.color : e.color;
+  if (color) row.style.setProperty('--c', color);
   // Off the board — archived or deleted. Marked in the route slot, the same
   // slot and the same language as a round trip's ↺: something happened to this
   // card that the week's route alone does not tell you.
@@ -3251,11 +3499,13 @@ function reportRow(e) {
     <span class="rf">${e.netZero
       ? `${esc(e.to)} <i>&#8634;</i>`
       : `${esc(e.from)}<i>&#8594;</i>${esc(e.to)}`}${
-      gone ? ` <i title="${tr('offBoard')}">&#8856;</i>` : ''}</span>
-    <button class="rd" title="${tr('weeklyReport')}">${C.dayLabel(e.day, locale)}</button>`;
+      gone ? ` <i title="${tr('offBoard')}">&#8856;</i>` : ''}${
+      e.boardLabel ? ` <span class="rtag">${esc(e.boardLabel)}</span>` : ''}</span>
+    ${e.active ? `<button class="rd" title="${tr('weeklyReport')}">${C.dayLabel(e.day, locale)}</button>`
+      : `<span class="rd static">${C.dayLabel(e.day, locale)}</span>`}`;
 
   row.onclick = () => {
-    if (repSel.has(e.taskId)) repSel.delete(e.taskId); else repSel.add(e.taskId);
+    if (repSel.has(e.rowKey)) repSel.delete(e.rowKey); else repSel.add(e.rowKey);
     row.classList.toggle('on');
     if (!stillMotion.matches) {
       $('.tick', row).animate(
@@ -3266,7 +3516,9 @@ function reportRow(e) {
     syncRepFoot();
   };
 
-  $('.rd', row).onclick = ev => { ev.stopPropagation(); editDay(row, e); };
+  // Dates are edited on the board that owns the row; another board's rows
+  // show the date without the editor in v1.
+  if (e.active) $('.rd', row).onclick = ev => { ev.stopPropagation(); editDay(row, e); };
   return row;
 }
 
@@ -3315,7 +3567,7 @@ function editDay(row, entry) {
 
 function reportMarkdown() {
   return C.toMarkdown(selected(), repWeek, {
-    projectOrder: state.projects.map(p => p.name),
+    projectOrder: reportProjectOrder(),
     locale,
   });
 }
@@ -3330,7 +3582,7 @@ $('#rep-all').onclick = () => {
   // from repSelByWeek on every pass, so a fresh Set here is discarded before
   // it reaches the screen. Select-none only ever worked because clear() mutates.
   if (repSel.size === repEntries.length) repSel.clear();
-  else repEntries.forEach(e => repSel.add(e.taskId));
+  else repEntries.forEach(e => repSel.add(e.rowKey));
   renderReport(false);
 };
 
@@ -3354,7 +3606,7 @@ $('#rep-week').onclick = e => {
   if (!weeksEl.hidden) { weeksEl.hidden = true; $('#rep-week').setAttribute('aria-expanded', 'false'); return; }
 
   weeksEl.innerHTML = '';
-  C.weeksWithActivity(state.events, C.ymd(), locale).forEach(w => {
+  C.weeksWithActivity(reportEvents(), C.ymd(), locale).forEach(w => {
     const b = document.createElement('button');
     b.setAttribute('aria-pressed', String(w.monday === repWeek));
     b.innerHTML = `${w.label}<span class="c">${w.count || '—'}</span>`;
@@ -3381,6 +3633,841 @@ document.addEventListener('click', e => {
     $('#rep-week').setAttribute('aria-expanded', 'false');
   }
 });
+
+/* ── team boards & computers ───────────────────────────────
+   docs/team.md and docs/computers.md. A team board is a board with a roster;
+   everything here is invisible on a board without one. The personal board
+   carries the teams you belong to, your computers and your private sessions
+   for team cards — and only the personal board's own page ever writes them:
+   other pages leave immutable request records that it ingests. */
+
+const readJson = key => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (err) { return null; } };
+function readStored(key) {
+  const raw = readJson(key);
+  if (!raw || typeof raw !== 'object' || C.isFutureBoard(raw)) return null;
+  try { return C.migrate(raw); } catch (err) { return null; }
+}
+const homeBoard = () => IS_HOME ? state : (readStored(HOME_KEY) || { teams: [], machines: [], privateSessions: {} });
+
+/* identity */
+
+const memberOf = (id, st = state) => (st.members || []).find(m => m.id === id) || null;
+/** The member this device is, on this team board — or null. */
+function me() {
+  if (!IS_TEAM || !state.me) return null;
+  return memberOf(state.me);
+}
+const initials = name => {
+  const words = String(name || '?').trim().split(/\s+/).filter(Boolean);
+  return ((words[0] || '?')[0] + (words.length > 1 ? words[words.length - 1][0] : (words[0] || '')[1] || '')).toUpperCase();
+};
+function avatarHtml(m, cls = '') {
+  if (!m) return '';
+  return `<span class="av ${cls}" style="--c:${m.color || COLORS[7]}" title="${esc(m.name)}">${esc(initials(m.name))}</span>`;
+}
+function nextMemberColor() {
+  const used = new Set((state.members || []).map(m => m.color));
+  return COLORS.find(c => !used.has(c)) || COLORS[(state.members || []).length % COLORS.length];
+}
+function setMe(id) {
+  state.me = id;
+  // "New for you" only ever covers assignments made after this moment, on a
+  // logical clock — so a reinstall or a fast-clock device never re-marks old
+  // work as new.
+  state.meSinceClock = C.clockMax(state);
+  save();
+}
+
+/* request records — the only way a page reaches the personal board */
+
+function reqRecords() {
+  const out = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(REQ_PREFIX)) continue;
+      const r = readJson(k);
+      if (r && typeof r.reqId === 'string' && typeof r.order === 'number' && typeof r.key === 'string') out.push(r);
+    }
+  } catch (err) { /* storage unavailable: nothing queued */ }
+  return out;
+}
+const reqGroup = r => (r.kind === 'session' ? 'session:' : 'team:') + r.key;
+const newerReq = (a, b) => b.order > a.order || (b.order === a.order && b.reqId > a.reqId) ? b : a;
+function latestReq(group) {
+  const list = reqRecords().filter(r => reqGroup(r) === group);
+  return list.length ? list.reduce(newerReq) : null;
+}
+
+/** Order is causal: past every request this page has seen for the same team
+    or session, and past `after` — so leave's Undo always follows its leave. */
+function enqueue(kind, key, payload, after = 0) {
+  const rec = { reqId: C.uid(), kind, key, payload, order: 0 };
+  const group = reqGroup(rec);
+  const home = homeBoard();
+  const seen = Math.max(0, ...reqRecords().filter(r => reqGroup(r) === group).map(r => r.order),
+    ((home.teamsReqApplied || {})[group]) || 0);
+  rec.order = Math.max(Date.now(), seen + 1, after + 1);
+  try { localStorage.setItem(REQ_PREFIX + rec.reqId, JSON.stringify(rec)); }
+  catch (err) { toast(tr('storageUnavailable'), null, 8000); }
+  if (IS_HOME) ingestRequests();
+  return rec;
+}
+
+/** Personal page only. Per team (or session), the newest request applies;
+    records at or below the persisted high-water mark are deleted — only after
+    that mark has reached storage, so a superseded leave can never replay. */
+function ingestRequests() {
+  if (!IS_HOME || readOnly) return;
+  const recs = reqRecords();
+  if (!recs.length) return;
+  state.teamsReqApplied = state.teamsReqApplied || {};
+  const groups = new Map();
+  recs.forEach(r => { const g = reqGroup(r); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(r); });
+  let changed = false;
+  for (const [g, list] of groups) {
+    const top = list.reduce(newerReq);
+    if (top.order > (state.teamsReqApplied[g] || 0)) {
+      applyRequest(top);
+      state.teamsReqApplied[g] = top.order;
+      changed = true;
+    }
+  }
+  if (changed) {
+    clearTimeout(saveTimer); saveTimer = null;
+    C.stampChanges(lastStamped, state);
+    lastStamped = clone(state);
+    if (!writeStateNow()) return; // not persisted: keep every record
+    if (sync) schedulePush();
+  }
+  for (const r of recs) {
+    if (r.order <= (state.teamsReqApplied[reqGroup(r)] || 0)) {
+      try { localStorage.removeItem(REQ_PREFIX + r.reqId); } catch (err) { /* retried next ingest */ }
+    }
+  }
+  if (changed) { render(); if (!compPanel.hidden) renderComputers(); }
+}
+
+function applyRequest(r) {
+  if (r.kind === 'join') {
+    const e = r.payload || {};
+    if (!C.isTeamNs(e.ns) || !e.id) return;
+    state.teams = state.teams || [];
+    const held = state.teams.find(x => x.id === e.id);
+    if (held) {
+      if (e.memberId) held.memberId = e.memberId;
+      if (e.secret) held.secret = e.secret;
+    } else {
+      state.teams.push({ id: e.id, ns: e.ns, label: e.label || tr('team'), secret: e.secret, memberId: e.memberId || null });
+    }
+  } else if (r.kind === 'leave') {
+    state.teams = (state.teams || []).filter(x => x.id !== r.key);
+    state.teamsLeft = state.teamsLeft || {};
+    state.teamsLeft[r.key] = 0; // stampChanges stamps it past the join it ends
+    // Your private sessions for that team go too — cleared, not deleted, so
+    // the clear reaches your other devices.
+    for (const k of Object.keys(state.privateSessions || {})) {
+      try { if (JSON.parse(k)[0] === r.key) state.privateSessions[k] = { session: '' }; } catch (err) { /* foreign key */ }
+    }
+  } else if (r.kind === 'session') {
+    let p = r.payload || {};
+    let teamId = null;
+    try { teamId = JSON.parse(r.key)[0]; } catch (err) { return; }
+    // after a leave, a stale tab's session request cannot bring one back
+    if (!(state.teams || []).some(t => t.id === teamId)) p = {};
+    state.privateSessions = state.privateSessions || {};
+    state.privateSessions[r.key] = p.session
+      ? { session: p.session, ...(p.sessionMachine ? { sessionMachine: p.sessionMachine } : {}), ...(p.sessionCwd ? { sessionCwd: p.sessionCwd } : {}) }
+      : { session: '' };
+  }
+}
+
+/* teams, as this page sees them: the personal board plus what is queued */
+
+function liveTeams() {
+  const home = homeBoard();
+  const teams = new Map((home.teams || []).map(t => [t.id, t]));
+  for (const r of reqRecords()) {
+    if (r.kind === 'session') continue;
+    const top = latestReq(reqGroup(r));
+    if (top.order <= (((home.teamsReqApplied || {})[reqGroup(r)]) || 0)) continue;
+    if (top.kind === 'leave') teams.delete(r.key);
+    else if (top.kind === 'join' && top.payload) teams.set(r.key, { ...(teams.get(r.key) || {}), ...top.payload });
+  }
+  return [...teams.values()];
+}
+const teamEntry = (id = TEAM_ID) => liveTeams().find(t => t.id === id) || null;
+const teamLabel = (entry) => (entry && entry.label) || tr('team');
+
+/* private sessions for team cards */
+
+const privKey = taskId => JSON.stringify([TEAM_ID, taskId]);
+function privateSessionFor(taskId) {
+  const key = privKey(taskId);
+  const pend = latestReq('session:' + key);
+  const home = homeBoard();
+  if (pend && pend.order > (((home.teamsReqApplied || {})['session:' + key]) || 0)) {
+    return pend.payload && pend.payload.session ? pend.payload : null;
+  }
+  const v = (home.privateSessions || {})[key];
+  return v && v.session ? v : null;
+}
+
+/* computers */
+
+const MACHINE_ICONS = {
+  laptop: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="3" y="3.5" width="10" height="7" rx="1.2"/><path d="M1.5 12.5h13" stroke-linecap="round"/></svg>',
+  desktop: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="2.5" width="12" height="8.5" rx="1.2"/><path d="M8 11v2.5M5.5 13.5h5" stroke-linecap="round"/></svg>',
+  mini: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2" y="5.5" width="12" height="5.5" rx="1.8"/><path d="M4.8 8.25h1.2" stroke-linecap="round"/></svg>',
+  server: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="4.5" rx="1"/><rect x="2.5" y="9" width="11" height="4.5" rx="1"/><path d="M5 4.75h.6M5 11.25h.6" stroke-linecap="round"/></svg>',
+};
+const DOWN_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5L8 10l3.5-3.5"/></svg>';
+const LOCK_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="3.6" y="7" width="8.8" height="6.4" rx="1.6"/><path d="M5.6 7V5.4a2.4 2.4 0 0 1 4.8 0V7"/></svg>';
+const LINK_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2-2a2.6 2.6 0 0 0-3.7-3.7l-.6.6"/><path d="M9.2 6.8a2.6 2.6 0 0 0-3.7 0l-2 2a2.6 2.6 0 0 0 3.7 3.7l.6-.6"/></svg>';
+
+const machines = () => (IS_HOME ? state.machines : homeBoard().machines) || [];
+const machineOf = id => machines().find(m => m.id === id) || null;
+function hereId() {
+  let id = null;
+  try { id = localStorage.getItem(HERE_KEY); } catch (err) { /* none */ }
+  return id && machineOf(id) ? id : null; // a here naming a deleted computer is no here
+}
+function setHere(id) {
+  try { localStorage.setItem(HERE_KEY, id); } catch (err) { /* this session only */ }
+}
+function machineHtml(id) {
+  const m = machineOf(id);
+  if (!m) return '';
+  return `<span class="mach${id === hereId() ? ' here' : ''}">${MACHINE_ICONS[m.icon] || MACHINE_ICONS.laptop}${esc(m.name)}</span>`;
+}
+/** What Copy hands you: on the session's own computer, from its folder. */
+const sessionCommand = s => s && s.session
+  ? (s.sessionCwd && s.sessionMachine && s.sessionMachine === hereId()
+    ? `cd ${s.sessionCwd.replace(/(["\s'$`\\])/g, '\\$1')} && ${s.session}` : s.session)
+  : '';
+
+/* new for you */
+
+const assigneeClock = t => (t.fieldMt && t.fieldMt.assignee) || t.mt || 0;
+function isNewForMe(t) {
+  return IS_TEAM && !!state.me && t.assigneeId === state.me && !!t.assignedBy && t.assignedBy !== state.me
+    && assigneeClock(t) > (state.meSinceClock || 0)
+    && ((state.seenAssign || {})[t.id]) !== assigneeClock(t);
+}
+let seenChanged = false;
+function markSeen(t) {
+  if (!isNewForMe(t)) return;
+  state.seenAssign = { ...(state.seenAssign || {}), [t.id]: assigneeClock(t) };
+  seenChanged = true; // the board behind the editor still shows it as new
+  save();
+}
+
+/* the switcher */
+
+const boardsMenu = $('#boardsMenu');
+function renderSwitcher() {
+  $('#sw-label').textContent = IS_TEAM ? teamLabel(teamEntry()) : tr('personal');
+}
+function closeBoardsMenu() { boardsMenu.hidden = true; $('#sw-btn').setAttribute('aria-expanded', 'false'); }
+function openBoardsMenu() {
+  boardsMenu.innerHTML = '';
+  const item = (lead, label, on, onclick) => {
+    const b = document.createElement('button');
+    b.className = 'bm-item' + (on ? ' on' : '');
+    b.innerHTML = `<span class="bm-lead">${lead}</span><span class="bm-label">${esc(label)}</span>${on ? `<span class="bm-check">${ICON.check}</span>` : ''}`;
+    b.onclick = onclick;
+    boardsMenu.append(b);
+    return b;
+  };
+  item(`<span class="bm-lock">${LOCK_ICON}</span>`, tr('personal'), !IS_TEAM && IS_HOME, () => { location.assign(boardUrl(null)); });
+  liveTeams().forEach(t => {
+    const stored = readStored(`board.v2.${t.ns}`);
+    const faces = ((stored && stored.members) || []).slice(0, 3).map(m => avatarHtml(m)).join('');
+    item(`<span class="bm-faces">${faces || `<span class="bm-lock">${LINK_ICON}</span>`}</span>`, teamLabel(t), t.id === TEAM_ID,
+      () => { location.assign(boardUrl(t.ns)); });
+  });
+  boardsMenu.append(document.createElement('hr'));
+  item(`<span class="bm-lock">${ICON.plus}</span>`, tr('newTeamBoard'), false, () => { closeBoardsMenu(); newTeamBoard(); });
+  const joinBtn = item(`<span class="bm-lock">${LINK_ICON}</span>`, tr('joinWithLink'), false, () => {
+    const form = document.createElement('form');
+    form.className = 'bm-join';
+    form.innerHTML = `<input type="text" spellcheck="false" autocomplete="off" placeholder="${esc(tr('pasteTeamLink'))}">`;
+    form.onsubmit = ev => { ev.preventDefault(); const v = $('input', form).value; $('input', form).value = ''; joinTeamLink(v); };
+    joinBtn.replaceWith(form);
+    $('input', form).focus();
+  });
+  const r = $('#sw-btn').getBoundingClientRect();
+  boardsMenu.style.top = `${r.bottom + 8}px`;
+  boardsMenu.style.left = `${Math.max(8, r.left)}px`;
+  boardsMenu.style.right = 'auto';
+  boardsMenu.hidden = false;
+  $('#sw-btn').setAttribute('aria-expanded', 'true');
+}
+$('#sw-btn').onclick = e => { e.stopPropagation(); if (boardsMenu.hidden) openBoardsMenu(); else closeBoardsMenu(); };
+document.addEventListener('click', e => {
+  if (!boardsMenu.hidden && !e.target.closest('#boardsMenu') && !e.target.closest('#sw-btn')) closeBoardsMenu();
+});
+
+/* creating and joining */
+
+async function newTeamBoard() {
+  const secret = C.randomSecret();
+  const id = await C.teamIdOf(secret);
+  location.assign(`${boardUrl(C.teamNs(id))}#new=${secret}`);
+}
+
+/** A read of someone's board that is never a relationship: its own keys, no
+    sync globals, no storage, no push. The report and link routing use it. */
+async function fetchBoardReadonly(secret) {
+  try {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(secret)) return null;
+    const keys = await C.deriveSync(secret);
+    const res = await relayHttp(`${RELAY}/v1/board`, { headers: { Authorization: `Bearer ${keys.token}` }, redirect: 'error' });
+    if (!res.ok) return null;
+    const head = await res.json();
+    if (!head || !head.env) return null;
+    const raw = await C.unseal(keys.key, head.env);
+    if (C.validateSyncable(raw)) return null;
+    return C.migrate(raw);
+  } catch (err) { return null; }
+}
+
+async function joinTeamLink(text) {
+  const parsed = parseSyncEntry(text || '');
+  if (!parsed) { toast(tr('notATeamLink')); return; }
+  const board = await fetchBoardReadonly(parsed.secret);
+  if (!board || !(board.members || []).length) { closeBoardsMenu(); toast(tr('notATeamLink')); return; }
+  const id = await C.teamIdOf(parsed.secret);
+  location.assign(`${boardUrl(C.teamNs(id))}#sync=${parsed.secret}`);
+}
+
+/** Before any candidate is inspected: a board with a roster is a team board,
+    however it arrived, and joins in its own derived namespace — never here on
+    a personal board. Returns true when it navigated away. */
+async function routeTeamCandidate(secret) {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(secret)) return false;
+  const id = await C.teamIdOf(secret);
+  if (IS_TEAM) {
+    if (C.teamNs(id) === NS) return false;
+    location.assign(`${boardUrl(C.teamNs(id))}#sync=${secret}`);
+    return true;
+  }
+  const board = await fetchBoardReadonly(secret);
+  if (!board || !(board.members || []).length) return false;
+  location.assign(`${boardUrl(C.teamNs(id))}#sync=${secret}`);
+  return true;
+}
+
+/** Re-attach this namespace to the secret it just left (leave's Undo). It is
+    the same board it was synced with seconds ago, so an ordinary pull-merge
+    is exactly right. */
+function reconnectSync(secret) {
+  suspendSyncRuntime();
+  state._bindingGen = nextGen(bindingGenOf(state));
+  lastStamped = clone(state);
+  if (!writeStateNow()) return;
+  sync = { secret, ver: 0, _bindingGen: clone(bindingGenOf(state)) };
+  syncKeys = null; remoteHead = ''; rejectedPayload = ''; floor = null; syncIncompatible = false;
+  saveSyncConfig();
+  connectWatch();
+  pull();
+}
+
+function leaveTeam() {
+  if (!IS_TEAM) return;
+  const entry = teamEntry() || {};
+  const secret = sync ? sync.secret : entry.secret;
+  const memberId = state.me || entry.memberId || null;
+  const rec = enqueue('leave', TEAM_ID, {});
+  if (sync) syncStopped();
+  renderSwitcher();
+  toast(tr('leftTeam'), () => {
+    // Undo is a rejoin request strictly after the leave, carrying the key
+    // this page still holds in memory.
+    enqueue('join', TEAM_ID, { id: TEAM_ID, ns: NS, label: teamLabel(entry), secret, memberId }, rec.order);
+    if (secret) reconnectSync(secret);
+    renderSwitcher();
+  }, 8000);
+}
+
+/* who are you? */
+
+const whoEl = $('#whoami');
+let whoMode = null;       // 'create' | 'join'
+let whoPick = null;       // chosen member id
+let whoAdding = false;
+let whoRenaming = false;  // your own row, as a text field
+let pendingNewSecret = null;
+
+function openWho(mode) {
+  whoMode = mode;
+  whoPick = mode === 'join' ? state.me : null;
+  whoAdding = mode === 'create' || !(state.members || []).length;
+  whoRenaming = false;
+  closeComposer();
+  scrim.hidden = false;
+  whoEl.hidden = false;
+  renderWho();
+}
+function closeWho() {
+  whoEl.hidden = true;
+  whoMode = null;
+  syncScrim();
+  flushExternal();
+}
+function renderWho() {
+  $('#whoTitle').textContent = tr('whoAreYou');
+  $('#who-back').textContent = tr('back');
+  $('#who-join').textContent = tr('join');
+  const list = $('#who-list');
+  const typed = list.querySelector('input') ? list.querySelector('input').value : '';
+  list.innerHTML = '';
+  [...(state.members || [])].sort((a, b) => a.name.localeCompare(b.name)).forEach(m => {
+    if (whoRenaming && m.id === state.me) {
+      // rename yourself in place; old events keep the name they were logged with
+      const row = document.createElement('label');
+      row.className = 'who-row adding';
+      row.innerHTML = `${avatarHtml(m, 'lg')}<input type="text" spellcheck="false" autocomplete="off" data-rename value="${esc(m.name)}">`;
+      const input = $('input', row);
+      input.addEventListener('input', syncWhoJoin);
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commitWho(); } });
+      list.append(row);
+      requestAnimationFrame(() => { input.focus(); input.select(); });
+      return;
+    }
+    const b = document.createElement('button');
+    b.className = 'who-row';
+    b.setAttribute('aria-pressed', String(whoPick === m.id && !whoAdding));
+    b.innerHTML = `${avatarHtml(m, 'lg')}<span class="who-name">${esc(m.name)}</span>${whoPick === m.id && !whoAdding ? `<span class="bm-check">${ICON.check}</span>` : ''}`;
+    b.onclick = () => {
+      // tapping your own chosen row again renames you
+      if (whoPick === m.id && m.id === state.me && !whoAdding) whoRenaming = true;
+      whoPick = m.id; whoAdding = false; renderWho();
+    };
+    list.append(b);
+  });
+  if (whoAdding) {
+    const row = document.createElement('label');
+    row.className = 'who-row adding';
+    row.innerHTML = `<span class="av lg preview" style="--c:${nextMemberColor()}"></span><input type="text" spellcheck="false" autocomplete="off" placeholder="${esc(tr('yourName'))}">`;
+    const input = $('input', row);
+    input.value = typed;
+    const preview = () => { $('.preview', row).textContent = input.value.trim() ? initials(input.value) : ''; syncWhoJoin(); };
+    input.addEventListener('input', preview);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commitWho(); } });
+    list.append(row);
+    preview();
+    requestAnimationFrame(() => input.focus());
+  } else {
+    const add = document.createElement('button');
+    add.className = 'who-row add';
+    add.innerHTML = `<span class="av lg ghost">${ICON.plus}</span><span class="who-name">${esc(tr('addYourName'))}</span>`;
+    add.onclick = () => { whoAdding = true; whoPick = null; renderWho(); };
+    list.append(add);
+  }
+  syncWhoJoin();
+}
+function syncWhoJoin() {
+  const input = $('#who-list input');
+  $('#who-join').disabled = (whoAdding || whoRenaming) ? !(input && input.value.trim()) : !whoPick;
+}
+async function commitWho() {
+  let pick = whoPick;
+  if (whoRenaming) {
+    const input = $('#who-list input[data-rename]');
+    const name = input ? input.value.trim() : '';
+    const mine = memberOf(state.me);
+    if (!name || !mine) return;
+    if (name !== mine.name) { mine.name = name; save(); }
+    whoRenaming = false;
+    closeWho();
+    render();
+    return;
+  }
+  if (whoAdding) {
+    const input = $('#who-list input');
+    const name = input ? input.value.trim() : '';
+    if (!name) return;
+    const same = (state.members || []).find(m => m.name.trim().toLowerCase() === name.toLowerCase());
+    if (same) { whoPick = same.id; whoAdding = false; renderWho(); return; } // pick, don't duplicate
+    const m = { id: C.uid(), name, color: nextMemberColor() };
+    state.members = [...(state.members || []), m];
+    pick = m.id;
+  }
+  if (!pick) return;
+  const mode = whoMode;
+  setMe(pick);
+  flushPendingSave();
+  closeWho();
+  if (mode === 'create') {
+    $('#who-join').disabled = true;
+    const ok = await enableSync(pendingNewSecret);
+    if (!ok) { toast(tr('syncFailed')); return; }
+    pendingNewSecret = null;
+    enqueue('join', TEAM_ID, { id: TEAM_ID, ns: NS, label: tr('team'), secret: sync.secret, memberId: pick });
+    openSync('on');
+  } else if (sync) {
+    const entry = teamEntry();
+    enqueue('join', TEAM_ID, { id: TEAM_ID, ns: NS, label: teamLabel(entry), secret: sync.secret, memberId: pick });
+  }
+  render();
+}
+function backWho() {
+  if (whoMode === 'create') {
+    // A team board without its first member would be rosterless forever:
+    // backing out discards the namespace entirely.
+    try { localStorage.removeItem(KEY); } catch (err) { /* nothing to discard */ }
+    readOnly = true; // nothing may re-save it on the way out
+    location.assign(boardUrl(null));
+    return;
+  }
+  closeWho();
+}
+$('#who-close').innerHTML = ICON.close;
+$('#who-close').onclick = backWho;
+$('#who-back').onclick = backWho;
+$('#who-join').onclick = commitWho;
+
+/* team page boot: identity and membership follow the personal board */
+
+function followTeamEntry() {
+  if (!IS_TEAM) return;
+  const entry = teamEntry();
+  const home = homeBoard();
+  // your devices agree on who you are: the entry's identity wins everywhere
+  if (entry && entry.memberId && entry.memberId !== state.me && memberOf(entry.memberId)) setMe(entry.memberId);
+  // Left on another device: disconnect here too — forget the key, keep the board.
+  if (!entry && home.teamsLeft && home.teamsLeft[TEAM_ID] != null && sync) syncStopped();
+  renderSwitcher();
+}
+
+/** After a team board is adopted: know who you are, or ask. */
+function afterTeamAdoption() {
+  if (!IS_TEAM || !(state.members || []).length) return;
+  followTeamEntry();
+  if (!state.me) openWho('join');
+  else if (sync) {
+    const entry = teamEntry();
+    if (!entry || !entry.secret) enqueue('join', TEAM_ID, { id: TEAM_ID, ns: NS, label: teamLabel(entry), secret: sync.secret, memberId: state.me });
+  }
+}
+
+function bootTeamPage() {
+  if (!IS_TEAM) return false;
+  const m = location.hash.match(/[#&]new=([A-Za-z0-9_-]{43})(?:&|$)/);
+  if (m) {
+    history.replaceState(null, '', location.pathname + location.search);
+    const secret = m[1];
+    // A new team starts in a fresh namespace or not at all: the namespace must
+    // be the one this secret derives, the board a never-touched seed, and no
+    // relationship may already live here. An occupied one (a hand-typed ?ns=,
+    // an old copy, a crafted link) is never quietly turned into a team.
+    const fresh = state.seed === true && !sync && !readJson(SYNC_KEY)
+      && !(state.members || []).length && !state.tasks.length && !state.events.length
+      && !(state.projects || []).length && !Object.keys(state.tombstones || {}).length;
+    C.teamIdOf(secret).then(id => {
+      if (fresh && C.teamNs(id) === NS) { pendingNewSecret = secret; openWho('create'); }
+      else location.assign(boardUrl(null));
+    }, () => location.assign(boardUrl(null)));
+    return true;
+  }
+  followTeamEntry();
+  const entry = teamEntry();
+  // Your teams follow you: a team joined on another device adopts here on
+  // first open, through the ordinary pristine path, with no question.
+  if (!sync && entry && entry.secret && state.seed === true && !location.hash) {
+    presentCandidateWhenSettled(entry.secret);
+    return true;
+  }
+  if (sync && (state.members || []).length && !state.me) openWho('join');
+  return false;
+}
+
+/** A team card deleted for good takes your private session for it along
+    (docs/computers.md): no stale command outlives its card. */
+function clearOrphanSessions() {
+  if (!IS_TEAM) return;
+  for (const id of Object.keys(state.tombstones || {})) {
+    if (!byId(id) && privateSessionFor(id)) enqueue('session', privKey(id), {});
+  }
+}
+
+/* rail: members, filters */
+
+function renderMembers() {
+  const el = $('#members');
+  const list = IS_TEAM ? (state.members || []) : [];
+  el.hidden = !list.length;
+  if (!list.length) return;
+  const mine = me();
+  const others = list.filter(m => !mine || m.id !== mine.id);
+  el.innerHTML = [mine, ...others].filter(Boolean).slice(0, 5).map(m => avatarHtml(m)).join('');
+  el.title = tr('whoAreYou');
+}
+$('#members').onclick = () => openWho('join');
+
+function assigneePills() {
+  if (!IS_TEAM || !(state.members || []).length) return [];
+  const live = state.tasks.filter(onBoard);
+  const pills = [];
+  const mineN = live.filter(t => t.assigneeId === state.me).length;
+  const fresh = live.filter(isNewForMe).length;
+  const mine = document.createElement('button');
+  mine.className = 'pill mine';
+  mine.setAttribute('aria-pressed', String(state.assigneeFilter === 'mine'));
+  mine.innerHTML = `${avatarHtml(me(), 'sm')}${esc(tr('mine'))}${mineN ? ` <span class="n">${mineN}</span>` : ''}${fresh ? ` <span class="newcount">${esc(tr('newCount', { n: fresh }))}</span>` : ''}`;
+  mine.onclick = () => { state.assigneeFilter = state.assigneeFilter === 'mine' ? null : 'mine'; state.flagFilter = false; save(); render(); };
+  pills.push(mine);
+  const un = document.createElement('button');
+  un.className = 'pill';
+  un.setAttribute('aria-pressed', String(state.assigneeFilter === 'unassigned'));
+  const unN = live.filter(t => !t.assigneeId).length;
+  un.innerHTML = `${esc(tr('unassigned'))}${unN ? ` <span class="n">${unN}</span>` : ''}`;
+  un.onclick = () => { state.assigneeFilter = state.assigneeFilter === 'unassigned' ? null : 'unassigned'; state.flagFilter = false; save(); render(); };
+  pills.push(un);
+  return pills;
+}
+
+/* the editor: assignee, history, computer, private session */
+
+const fAssignee = $('#f-assignee');
+const fMachine = $('#f-machine');
+const machineMenu = $('#machineMenu');
+
+function renderAssignee() {
+  const field = $('#assigneeField');
+  field.hidden = !(IS_TEAM && (state.members || []).length);
+  if (field.hidden) return;
+  $('#assigneeLabel').textContent = tr('assignee');
+  fAssignee.innerHTML = '';
+  const canAssign = !!me();
+  const choice = (label, id, m) => {
+    const b = document.createElement('button');
+    b.className = 'pill who';
+    b.disabled = !canAssign;
+    b.setAttribute('aria-pressed', String((draft.assigneeId || null) === id));
+    b.innerHTML = `${m ? avatarHtml(m, 'sm') : ''}${esc(label)}`;
+    b.onclick = () => { draft.assigneeId = id; renderAssignee(); };
+    fAssignee.append(b);
+  };
+  choice(tr('nobody'), null, null); // first, like the project chooser's None
+  [...state.members].sort((a, b) => a.name.localeCompare(b.name)).forEach(m => choice(m.name, m.id, m));
+}
+
+function renderHistory() {
+  const box = $('#f-history');
+  const t = editing && editing !== 'new' ? byId(editing) : null;
+  box.hidden = !(IS_TEAM && t);
+  if (box.hidden) return;
+  const rows = state.events.filter(e => e.taskId === t.id).sort((a, b) => (a.at || 0) - (b.at || 0));
+  const time = at => new Intl.DateTimeFormat(locale === 'es' ? 'es-CL' : 'en-GB', { timeZone: C.TZ, weekday: 'short', hour: '2-digit', minute: '2-digit' }).format(at);
+  const line = (m, name, words, at) => `<div class="h-row">${m ? avatarHtml(m, 'sm') : '<span class="av sm ghost"></span>'}<span class="h-what"><b>${esc(name)}</b> ${esc(words)}</span><span class="h-when">${esc(at ? time(at) : '')}</span></div>`;
+  const items = rows.map(e => {
+    const m = memberOf(e.by);
+    return { m, name: m ? m.name : e.byName || tr('someone'),
+      words: e.type === 'created' ? tr('created', { stage: e.to }) : tr('movedTo', { stage: e.to }), at: e.at || 0 };
+  });
+  // the current assignment is not in the log; it takes its place by time
+  if (t.assignedBy) {
+    const by = memberOf(t.assignedBy);
+    const to = memberOf(t.assigneeId);
+    items.push({ m: by, name: by ? by.name : tr('someone'),
+      words: to ? tr('assigned', { name: to.name }) : tr('unassignedIt'), at: t.assignedAt || 0 });
+  }
+  items.sort((a, b) => a.at - b.at);
+  box.innerHTML = `<div class="h-lbl">${esc(tr('history'))}</div>` + items.map(i => line(i.m, i.name, i.words, i.at)).join('');
+}
+
+function renderMachinePick() {
+  const has = !!fSession.value.trim();
+  const list = machines();
+  fMachine.hidden = !has || (!list.length && !IS_HOME);
+  if (fMachine.hidden) return;
+  const m = machineOf(draft.sessionMachine);
+  fMachine.innerHTML = m
+    ? `${MACHINE_ICONS[m.icon] || MACHINE_ICONS.laptop}<span>${esc(m.name)}</span>${DOWN_ICON}`
+    : `<span>${esc(tr('computer'))}</span>${DOWN_ICON}`;
+  fMachine.classList.toggle('unset', !m);
+}
+fSession.addEventListener('input', () => {
+  // pasting a session fills the computer with this one; one click changes it
+  if (fSession.value.trim() && !draft.sessionMachine && hereId()) draft.sessionMachine = hereId();
+  if (!fSession.value.trim()) { draft.sessionMachine = null; draft.sessionCwd = null; }
+  renderMachinePick();
+});
+function closeMachineMenu() { machineMenu.hidden = true; fMachine.setAttribute('aria-expanded', 'false'); }
+fMachine.onclick = e => {
+  e.stopPropagation();
+  if (!machineMenu.hidden) { closeMachineMenu(); return; }
+  machineMenu.innerHTML = '';
+  const here = hereId();
+  machines().forEach(m => {
+    const b = document.createElement('button');
+    b.className = 'mm-item' + (draft.sessionMachine === m.id ? ' on' : '');
+    b.innerHTML = `${MACHINE_ICONS[m.icon] || MACHINE_ICONS.laptop}<span class="mm-name">${esc(m.name)}</span>${m.id === here ? `<span class="mm-here">${esc(tr('here'))}</span>` : ''}${draft.sessionMachine === m.id ? `<span class="bm-check">${ICON.check}</span>` : ''}`;
+    b.onclick = () => { draft.sessionMachine = m.id; closeMachineMenu(); renderMachinePick(); };
+    machineMenu.append(b);
+  });
+  if (machines().length) machineMenu.append(document.createElement('hr'));
+  const add = document.createElement('button');
+  add.className = 'mm-item add';
+  add.innerHTML = `${ICON.plus}<span class="mm-name">${esc(tr('addComputer'))}</span>`;
+  add.onclick = () => {
+    closeMachineMenu();
+    if (IS_HOME) { saveEditor(); openComputers(true); }
+    else { saveEditor(); location.assign(`${boardUrl(null)}#computers`); }
+  };
+  machineMenu.append(add);
+  const r = fMachine.getBoundingClientRect();
+  machineMenu.style.top = `${r.bottom + 6}px`;
+  machineMenu.style.left = `${Math.max(8, r.right - 240)}px`;
+  machineMenu.style.right = 'auto';
+  machineMenu.hidden = false;
+  fMachine.setAttribute('aria-expanded', 'true');
+};
+document.addEventListener('click', e => {
+  if (!machineMenu.hidden && !e.target.closest('#machineMenu') && !e.target.closest('#f-machine')) closeMachineMenu();
+});
+
+/* the Computers panel (personal board) */
+
+const compPanel = $('#computers');
+let compOpenRow = null;
+function openComputers(focusNew = false) {
+  if (!IS_HOME) { location.assign(`${boardUrl(null)}#computers`); return; }
+  closeComposer();
+  compPanel.hidden = false;
+  scrim.hidden = false;
+  renderComputers();
+  if (focusNew) requestAnimationFrame(() => $('#comp-name').focus());
+}
+function closeComputers() {
+  compPanel.hidden = true;
+  compOpenRow = null;
+  syncScrim();
+}
+function renderComputers() {
+  $('#computers h2').textContent = tr('computers');
+  $('#comp-name').placeholder = tr('newComputer');
+  $('#comp-add button').textContent = tr('add');
+  const list = $('#comp-list');
+  list.innerHTML = '';
+  const here = hereId();
+  (state.machines || []).forEach(m => {
+    const row = document.createElement('div');
+    row.className = 'comp-row' + (compOpenRow === m.id ? ' open' : '');
+    row.innerHTML = `
+      <div class="comp-top">
+        <button class="comp-icon" title="${esc(m.name)}">${MACHINE_ICONS[m.icon] || MACHINE_ICONS.laptop}</button>
+        <input class="comp-name" value="${esc(m.name)}" spellcheck="false" autocomplete="off">
+        ${m.id === here ? `<span class="comp-here">${esc(tr('here'))}</span>` : `<button class="comp-make" title="${esc(tr('makeHere'))}">${esc(tr('here'))}</button>`}
+        <button class="icon sm comp-del" title="${esc(tr('delete'))}">${ICON.close}</button>
+      </div>
+      ${compOpenRow === m.id ? `<div class="comp-icons">${C.ICONS.map(k => `<button data-icon="${k}" aria-pressed="${String((m.icon || 'laptop') === k)}">${MACHINE_ICONS[k]}</button>`).join('')}</div>` : ''}`;
+    $('.comp-icon', row).onclick = () => { compOpenRow = compOpenRow === m.id ? null : m.id; renderComputers(); };
+    const name = $('.comp-name', row);
+    name.addEventListener('change', () => { const v = name.value.trim(); if (v && v !== m.name) { m.name = v; save(); render(); } else name.value = m.name; });
+    name.addEventListener('keydown', e => { if (e.key === 'Enter') name.blur(); });
+    const make = $('.comp-make', row);
+    if (make) make.onclick = () => { setHere(m.id); renderComputers(); render(); };
+    $('.comp-del', row).onclick = () => {
+      snapshot();
+      state.machines = state.machines.filter(x => x.id !== m.id);
+      state.tombstones = { ...(state.tombstones || {}), [m.id]: 0 }; // stampChanges stamps it past everything
+      state.tasks.forEach(t => { if (t.sessionMachine === m.id) delete t.sessionMachine; });
+      for (const v of Object.values(state.privateSessions || {})) if (v.sessionMachine === m.id) delete v.sessionMachine;
+      save(); renderComputers(); render();
+      toast(tr('delete'), undo);
+    };
+    $$('.comp-icons button', row).forEach(b => b.onclick = () => { m.icon = b.dataset.icon; save(); renderComputers(); render(); });
+    list.append(row);
+  });
+  const hint = here ? machineOf(here) : null;
+  $('#comp-cli').innerHTML = hint ? `<span class="caret">&#9656;</span> kanban here "${esc(hint.name)}"` : '';
+}
+$('#comp-add').onsubmit = e => {
+  e.preventDefault();
+  const input = $('#comp-name');
+  const name = input.value.trim();
+  if (!name) return;
+  state.machines = state.machines || [];
+  const m = { id: C.uid(), name, icon: /mini/i.test(name) ? 'mini' : /server|linux|box/i.test(name) ? 'server' : /imac|studio|desktop|pc/i.test(name) ? 'desktop' : 'laptop' };
+  state.machines.push(m);
+  if (!hereId()) setHere(m.id); // the first computer you add is usually the one you are on
+  input.value = '';
+  save();
+  renderComputers();
+  render();
+};
+$('[data-close]', compPanel).innerHTML = ICON.close;
+$('[data-close]', compPanel).onclick = closeComputers;
+
+/* my week: the report across the personal board and your teams */
+
+/** Other boards whose rows belong in this device's report: the personal board
+    (when this page is a team) and every team you belong to where you are
+    known. Each comes with its own done column, lookup and project colors. */
+function reportSources() {
+  if (!IS_HOME && !IS_TEAM) return [];
+  const out = [];
+  if (IS_TEAM) {
+    const home = homeBoard();
+    if (home && home.columns) out.push({ ns: HOME || null, label: null, board: home, me: null, secret: (readJson(HOME_SYNC_KEY) || {}).secret || null });
+  }
+  liveTeams().forEach(t => {
+    if (t.ns === NS) return;
+    const stored = readStored(`board.v2.${t.ns}`);
+    const me = (stored && stored.me) || t.memberId;
+    if (!me) return;
+    out.push({ ns: t.ns, label: teamLabel(t), board: stored, me, secret: t.secret || null });
+  });
+  return out;
+}
+
+let reportAttempt = 0;
+const reportFresh = new Map(); // ns → a fresher read-only copy for this report
+const reportStale = new Set(); // ns whose refresh failed while this report was open
+function freshenReport() {
+  const attempt = ++reportAttempt;
+  reportStale.clear();
+  reportSources().forEach(async src => {
+    if (!src.secret) return;
+    const fresh = await fetchBoardReadonly(src.secret);
+    if (attempt !== reportAttempt || reportEl.hidden) return;
+    if (!fresh) { reportStale.add(src.ns); renderReport(false); return; }
+    try { localStorage.setItem(`board.read.${src.ns || ''}`, String(Date.now())); } catch (err) { /* label only */ }
+    // a report-only merge: the stored copy may hold work not yet on the relay
+    reportFresh.set(src.ns, src.board ? C.merge(src.board, fresh) : fresh);
+    renderReport(false);
+  });
+}
+
+function rowsFrom(board, ns, label, onlyMe) {
+  if (!board || !board.columns || !board.columns.length) return [];
+  const doneCol = board.columns[board.columns.length - 1];
+  const lookup = id => {
+    const t = (board.tasks || []).find(x => x.id === id);
+    if (!t) return null;
+    const p = (board.projects || []).find(x => x.id === t.projectId);
+    return { title: t.title, project: p ? p.name : null, archived: !!t.archivedAt };
+  };
+  let rows = C.aggregateWeek(board.events || [], repWeek, lookup, { id: doneCol.id, name: doneCol.name });
+  if (onlyMe) {
+    rows = rows.filter(r => r.byIds.includes(onlyMe));
+    // Your week: a card you created and someone else finished is listed, not
+    // announced. The default tick needs you across the done line.
+    rows.forEach(r => { r.include = r.include && r.doneBy === onlyMe; });
+  }
+  rows.forEach(r => {
+    r.ns = ns;
+    r.boardLabel = label;
+    r.rowKey = JSON.stringify([ns, r.taskId]);
+    const p = (board.projects || []).find(x => x.name === r.project);
+    r.color = p ? p.color : null;
+    r.done = doneCol.name;
+  });
+  return rows;
+}
 
 /* ── go ────────────────────────────────────────────────── */
 
@@ -3420,9 +4507,11 @@ function presentCandidateWhenSettled(secret) {
   if (!editor.hidden) saveEditor();
   closeProjects(); closeReport(); closeArchive();
   if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-  const settle = () => {
+  const settle = async () => {
     if (id !== candidatePresentation) return;
     if (syncBusy()) { setTimeout(settle, 50); return; }
+    if (await routeTeamCandidate(secret)) return;
+    if (id !== candidatePresentation) return;
     inspectCandidate(secret);
   };
   settle();
@@ -3442,7 +4531,11 @@ function adoptFromHash() {
 // change, not a load — no reload, so the boot path below never sees it.
 window.addEventListener('hashchange', adoptFromHash);
 
-adoptFromHash();
+if (IS_HOME) ingestRequests();
+const teamBooted = bootTeamPage();
+if (!teamBooted) adoptFromHash();
+if (location.hash === '#computers') { history.replaceState(null, '', location.pathname + location.search); openComputers(true); }
+if (readOnly) toast(tr('needsUpdate'), null, 10000);
 if (sync) {
   connectWatch();
   pull();

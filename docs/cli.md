@@ -38,6 +38,9 @@ crypto. Everything below follows from that framing.
   is a real confirmation in the app.
 - **No re-implementation of anything in `core.js`.** See Invariants.
 - **No daemon, no watch, no cache.** One command, one exchange, exit.
+- **No member creation, and one board per write.** On a team board the CLI
+  picks an existing roster member (`whoami`) and never adds one. Every write
+  lands on exactly one board — see Team boards below.
 - **Not a TUI.** Reading a board comfortably is what the app is for.
 
 ## Addressing
@@ -291,10 +294,12 @@ Read-only; no `PUT`. Hides archived cards unless `--all`.
 
 ### `kanban report [--week YYYY-MM-DD] [--locale en|es] [--md]`
 
-`aggregateWeek(events, monday, lookup, doneStage)` (`core.js:112`) is not pure
+`aggregateWeek(events, monday, lookup, done)` (`core.js`) is not pure
 over `(events, period)` — it needs a task lookup for live annotations and the
-last column's name. The CLI builds `lookup` from the fetched tasks and passes
-`columns[columns.length - 1].name` as `doneStage`, mirroring `app.js:3168`.
+done column. The CLI builds `lookup` from the fetched tasks and passes the last
+column as `{ id, name }`, so events that carry column ids classify by id.
+The CLI report is **one board**: the browser's report spans your personal
+board and your teams (`docs/team.md`); the CLI's does not.
 
 `--week` must be a Monday, or is normalised through `C.mondayOf`; weeks run
 Monday–Sunday in America/Santiago (`CLAUDE.md:46`) and an arbitrary date would
@@ -304,6 +309,28 @@ silently report a different span.
 the app's export copies when the user changes no ticks. Locale is a device
 preference and is not synced, so parity requires an explicit `--locale`
 (default `en`).
+
+### Team boards and computers (`docs/team.md`, `docs/computers.md`)
+
+- `kanban whoami [<name>] [--member-id ID]` stores a roster member id beside
+  the board's config entry. Ambiguous names are refused and listed.
+- `add`/`mv`/`done` write `by`/`byName` and column ids through `pushEvent`
+  when an identity exists; without one the event is unattributed — never
+  guessed.
+- `kanban assign <id> <name|nobody>` needs an identity (the field group
+  records who assigned it). `kanban ls --mine` filters to your cards.
+- `kanban here "<computer>" [--icon …]` on the personal board matches or
+  creates a computer and records it as this machine's here, per personal
+  board; the board it ran on becomes the CLI's personal board. Until then,
+  `--session` uses the one computer whose name the hostname contains, and
+  says so.
+- **One board per write.** `--session` on a team board is refused before
+  anything is fetched-and-written; `kanban session <id> "<cmd>"` reads the
+  team board and writes only the personal board's `privateSessions`. A
+  command that could land on one board and fail on the other would leave a
+  retry to duplicate the card.
+- **The firewall runs before every land:** `mutate` validates the stamped
+  payload against its kind, so no CLI path can put a session on a team board.
 
 ## Safety
 

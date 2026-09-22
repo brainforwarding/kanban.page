@@ -248,6 +248,10 @@ is the explanation: a card that moved elsewhere glides, one that arrived gets
 the same entrance a locally created card gets. A marker would also imply
 attribution, and there is no identity here — the other device is you.
 
+The one exception lives on team boards (`docs/team.md`): a card a teammate
+assigns to you is marked **New** until you open it. That is not a sync event —
+it is a message from a person — and it is the only change ever marked.
+
 **The two exits name their scope and consequence.** *Disconnect this device*
 forgets the key here; the board stays local and other devices continue
 syncing. Nothing is lost, so it takes an Undo toast rather than a confirm — but
@@ -266,6 +270,17 @@ confirmed `204`/`410` is allowed to claim the relationship ended.
   are recoverable, both are brief — the PWA offers the update on next load —
   and both beat the alternative of a version split where two tabs silently
   edit different boards.
+
+  **Team and computer data is the exception, and is `v: 3`** (`docs/team.md` →
+  Schema). An older client would silently drop a roster, a team list or a
+  computer list from the relay, and its `fieldMt` rebuild could overwrite a
+  newer assignment — losses that do not heal. So any board carrying that data
+  is written as v3, and every older client refuses it: an out-of-date device
+  stops syncing that board, visibly, until it updates. Boards without team or
+  computer data stay v2, byte for byte. This release also adds the forward
+  guard the next bump needs: a stored board newer than `SYNC_V` is checked
+  before `migrate` and loads read-only, and an incompatible remote head is a
+  terminal status rather than a retry loop.
 - **An old installed shell** opening a `#sync=` link does not know what to do
   with it, but it also does not strip it: accepting the update prompt reloads
   with the fragment intact and the link adopts.

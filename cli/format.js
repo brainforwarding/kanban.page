@@ -36,16 +36,18 @@ function summaryLine(s) {
 
 function card(st, t) {
   const p = ops.projectName(st, t);
+  const who = t.assigneeId && (st.members || []).find(m => m.id === t.assigneeId);
   return [
     t.id.slice(0, 6),
     t.flag ? '★' : ' ',
     t.title,
     p ? `· ${p}` : '',
+    who ? `@${who.name}` : '',
     t.archivedAt ? '⊘' : '',
   ].filter(Boolean).join('  ');
 }
 
-function list(st, { stage, project, all } = {}) {
+function list(st, { stage, project, all, mine } = {}) {
   const out = [];
   const pool = (all ? st.tasks : ops.live(st));
   for (const c of st.columns) {
@@ -53,6 +55,7 @@ function list(st, { stage, project, all } = {}) {
     let cards = pool.filter(t => t.columnId === c.id && !t.archivedAt)
       .sort((a, b) => a.order - b.order);
     if (project) cards = cards.filter(t => (ops.projectName(st, t) || '').toLowerCase() === project.toLowerCase());
+    if (mine) cards = cards.filter(t => t.assigneeId === mine);
     out.push(`${c.name.toUpperCase()}  ${cards.length}`);
     for (const t of cards) out.push('  ' + card(st, t));
     out.push('');
@@ -75,7 +78,12 @@ function show(st, t) {
     `project  ${ops.projectName(st, t) || '—'}`,
     `flag     ${t.flag ? 'yes' : 'no'}`,
   ];
-  if (t.session) lines.push(`session  ${t.session}`);
+  const who = t.assigneeId && (st.members || []).find(m => m.id === t.assigneeId);
+  if (who) lines.push(`assignee ${who.name}`);
+  if (t.session) {
+    const pc = t.sessionMachine && (st.machines || []).find(m => m.id === t.sessionMachine);
+    lines.push(`session  ${[t.session, pc ? pc.name : '', t.sessionCwd || ''].filter(Boolean).join('  · ')}`);
+  }
   if (t.notes) lines.push('', t.notes);
   return lines.join('\n');
 }

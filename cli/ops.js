@@ -60,8 +60,11 @@ const colName = (st, id) => {
   return c ? c.name : '';
 };
 
-/** Mirrors app.js logEvent: names are snapshotted as strings, never referenced. */
-function pushEvent(st, task, type, fromColId, toColId) {
+/** Mirrors app.js logEvent: names are snapshotted as strings, never
+    referenced; column ids beside them; `me` (a roster member) only when this
+    CLI has an identity on a team board — otherwise the move is unattributed,
+    never guessed. */
+function pushEvent(st, task, type, fromColId, toColId, me = null) {
   const e = C.makeEvent({
     taskId: task.id,
     title: task.title,
@@ -69,9 +72,30 @@ function pushEvent(st, task, type, fromColId, toColId) {
     type,
     from: fromColId ? colName(st, fromColId) : null,
     to: colName(st, toColId),
+    fromColumnId: fromColId || null,
+    toColumnId: toColId,
+    by: me ? me.id : null,
+    byName: me ? me.name : null,
   });
   st.events.push(e);
   return e;
+}
+
+const isTeam = st => (st.members || []).length > 0;
+
+/** Case-insensitive, ambiguity refused — like stages and projects. */
+function resolveMember(st, needle, memberId) {
+  if (memberId) return byId(st.members || [], memberId, 'member');
+  return resolveOne(st.members || [], needle, 'member');
+}
+
+/** A resume command is private and belongs to one computer; a team board
+    never carries one (docs/computers.md, the session firewall). */
+function refuseTeamSession(st, session) {
+  if (session && isTeam(st)) {
+    throw new OpError('usage',
+      'sessions on team cards are private and never go on the team board. Run `kanban session <card> "<cmd>"` to keep it on your personal board.');
+  }
 }
 
 /* ── mutations ───────────────────────────────────────────
@@ -90,15 +114,19 @@ function add(remote, opts) {
     : opts.project ? resolveProject(st, opts.project)
       : null;
 
+  refuseTeamSession(st, opts.session);
   const now = Date.now();
   const t = {
     id: C.uid(), title, notes: opts.notes || '', projectId: project ? project.id : null,
-    session: opts.session || '', flag: !!opts.flag, columnId: col.id,
+    // a team card has no session slot at all (the firewall checks presence)
+    ...(isTeam(st) ? {} : { session: opts.session || '' }), flag: !!opts.flag, columnId: col.id,
     order: 0, createdAt: now, updatedAt: now,
+    ...(opts.session && opts.sessionMachine ? { sessionMachine: opts.sessionMachine } : {}),
+    ...(opts.session && opts.sessionCwd ? { sessionCwd: opts.sessionCwd } : {}),
   };
   st.tasks.filter(x => x.columnId === t.columnId).forEach(x => { x.order += 1; });
   st.tasks.push(t);
-  const e = pushEvent(st, t, 'created', null, t.columnId);
+  const e = pushEvent(st, t, 'created', null, t.columnId, opts.me);
 
   return {
     state: st,
@@ -126,7 +154,7 @@ function move(remote, opts) {
   t.order = -1;
   C.reindex(st.tasks, dest.id);
   t.updatedAt = Date.now();
-  const e = pushEvent(st, t, 'moved', from, dest.id);
+  const e = pushEvent(st, t, 'moved', from, dest.id, opts.me);
 
   return {
     state: st,
@@ -148,7 +176,18 @@ function edit(remote, opts) {
     set('title', title);
   }
   if (opts.notes !== undefined) set('notes', opts.notes);
-  if (opts.session !== undefined) set('session', opts.session);
+  if (opts.session !== undefined) {
+    refuseTeamSession(st, opts.session);
+    set('session', opts.session);
+    // the session group is atomic: a new command gets this computer and folder
+    if (opts.session) {
+      if (opts.sessionMachine) set('sessionMachine', opts.sessionMachine); else if (t.sessionMachine) { delete t.sessionMachine; touched = true; }
+      if (opts.sessionCwd) set('sessionCwd', opts.sessionCwd);
+    } else {
+      if (t.sessionMachine) { delete t.sessionMachine; touched = true; }
+      if (t.sessionCwd) { delete t.sessionCwd; touched = true; }
+    }
+  }
   if (opts.flag !== undefined) set('flag', !!opts.flag);
   if (opts.noProject) set('projectId', null);
   else if (opts.projectId) set('projectId', byId(st.projects || [], opts.projectId, 'project').id);
@@ -218,7 +257,84 @@ function restore(remote, opts) {
   };
 }
 
+/** Hand a card to someone (or to nobody). Needs an identity: the field
+    group records who assigned it. */
+function assign(remote, opts) {
+  const st = clone(remote);
+  if (!isTeam(st)) throw new OpError('usage', 'assigning needs a team board (one with a roster)');
+  if (!opts.me) throw new OpError('usage', 'assigning needs to know who you are: run `kanban whoami <your name>` on this board first');
+  const t = resolveTask(st, opts.id);
+  const to = /^(nobody|none|-)$/i.test(opts.to || '') ? null : resolveMember(st, opts.to, opts.memberId);
+  if ((t.assigneeId || null) === (to ? to.id : null)) {
+    return { noop: true, summary: { verb: '=', title: t.title, stage: colName(st, t.columnId) } };
+  }
+  t.assigneeId = to ? to.id : null;
+  t.assignedBy = opts.me.id;
+  t.assignedAt = Date.now();
+  return {
+    state: st,
+    probeFromStamped: stamped => {
+      const me = stamped.tasks.find(x => x.id === t.id);
+      const clock = C.mtOf(me);
+      return p => {
+        const there = (p.tasks || []).find(x => x.id === t.id);
+        return !!there && (there.assigneeId || null) === t.assigneeId && C.mtOf(there) >= clock;
+      };
+    },
+    summary: { verb: '@', title: t.title, stage: colName(st, t.columnId), project: to ? to.name : 'nobody' },
+  };
+}
+
+/** Match or create a computer on the personal board (docs/computers.md). */
+function here(remote, opts) {
+  const st = clone(remote);
+  if (isTeam(st)) throw new OpError('usage', 'computers live on your personal board, not on a team board. Pass --board <personal>.');
+  const name = (opts.name || '').trim();
+  if (!name) throw new OpError('usage', 'kanban here "<computer name>"');
+  st.machines = st.machines || [];
+  const hits = st.machines.filter(m => m.name.toLowerCase() === name.toLowerCase());
+  if (hits.length > 1 && !opts.machineId) {
+    throw new OpError('usage', `"${name}" matches ${hits.length} computers: ${hits.map(m => `${m.name} [${m.id}]`).join(', ')}. Use --machine-id.`);
+  }
+  const found = opts.machineId ? byId(st.machines, opts.machineId, 'computer') : hits[0];
+  if (found) return { noop: true, machine: found, summary: { verb: '=', title: found.name, stage: 'computers' } };
+  const icon = C.ICONS.includes(opts.icon) ? opts.icon : 'laptop';
+  const m = { id: C.uid(), name, icon };
+  st.machines.push(m);
+  return {
+    state: st,
+    machine: m,
+    probe: p => (p.machines || []).some(x => x.id === m.id),
+    summary: { verb: '+', title: name, stage: 'computers' },
+  };
+}
+
+/** A private session for a team card, on the personal board — the one
+    board this command writes. */
+function privateSession(remote, opts) {
+  const st = clone(remote);
+  if (isTeam(st)) throw new OpError('usage', 'private sessions live on your personal board');
+  st.privateSessions = st.privateSessions || {};
+  const key = JSON.stringify([opts.teamId, opts.taskId]);
+  const next = opts.session
+    ? { session: opts.session, ...(opts.sessionMachine ? { sessionMachine: opts.sessionMachine } : {}), ...(opts.sessionCwd ? { sessionCwd: opts.sessionCwd } : {}) }
+    : { session: '' };
+  const held = st.privateSessions[key];
+  const same = held && held.session === next.session && (held.sessionMachine || null) === (next.sessionMachine || null)
+    && (held.sessionCwd || null) === (next.sessionCwd || null);
+  if (same) return { noop: true, summary: { verb: '=', title: opts.title, stage: 'session' } };
+  st.privateSessions[key] = next;
+  return {
+    state: st,
+    probeFromStamped: stamped => {
+      const clock = stamped.privateSessions[key].mt;
+      return p => !!(p.privateSessions && p.privateSessions[key] && (p.privateSessions[key].mt || 0) >= clock);
+    },
+    summary: { verb: '▸', title: opts.title, stage: 'session' },
+  };
+}
+
 module.exports = {
-  OpError, add, move, edit, archive, restore,
-  resolveTask, resolveStage, resolveProject, projectName, colName, doneStage, live, clone,
+  OpError, add, move, edit, archive, restore, assign, here, privateSession,
+  resolveTask, resolveStage, resolveProject, resolveMember, projectName, colName, doneStage, live, clone, isTeam,
 };

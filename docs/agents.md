@@ -41,6 +41,23 @@ kanban archive 4f2a
 kanban restore 4f2a
 ```
 
+On a **team board** (one with a roster):
+
+```bash
+kanban whoami "Sebastián"          # once per board: who this machine writes as
+kanban ls --mine                   # the cards assigned to me
+kanban assign 4f2a Andrea          # hand a card to someone (or `nobody`)
+kanban session 4f2a "claude --resume …"   # my private session for a team card
+```
+
+Moves on a team board are attributed to the `whoami` identity; without one
+they are unattributed and never count toward anyone's week. `--session` is
+refused on a team board — a session is private and lives on the personal
+board, which is what `kanban session` writes.
+
+Computers: `kanban here "Mac mini" --board <personal>` once per machine, and
+every `--session` written from it records the computer and the folder.
+
 Card ids take any unambiguous prefix of 4+ characters. An ambiguous prefix
 fails and lists the matches — it never guesses.
 

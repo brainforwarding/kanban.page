@@ -44,6 +44,21 @@ anyone you give it to can read and edit the board, while the server only ever
 holds bytes it cannot decrypt. Every device keeps a complete local copy, and
 sync is reversible from either end. See [docs/sync.md](docs/sync.md).
 
+**A board for your team, beside yours.** The switcher next to the wordmark
+holds your personal board and your teams. **New team board…** asks one thing —
+who you are — and gives you a link for your teammates. On a team board a card
+can be assigned, the Mine pill counts what was handed to you, and a Done card
+says who moved it across the line. Your personal board stays yours; there are
+no private cards, because a shared key cannot keep secrets. Your teams follow
+you to every device paired to your personal board, and your weekly report
+covers both. See [docs/team.md](docs/team.md).
+
+**Every session knows its computer.** Register your computers once (⋯ →
+Computers) and a pasted `claude --resume` or `codex resume` remembers which
+machine it lives on — the card says *Mac mini* instead of leaving you to guess.
+On a team card your session is private: it lives on your personal board, and
+teammates never see it. See [docs/computers.md](docs/computers.md).
+
 **Want it to work differently? Ask your agent.** ~4,000 lines of vanilla HTML/CSS/JS,
 no build step, no dependencies, and a `CLAUDE.md` that lands an agent oriented
 instead of guessing.
@@ -149,7 +164,8 @@ invariants it holds to.
 
 ```bash
 node --test tests/core.test.js     # 114 unit tests, no dependencies
-node --test tests/cli.test.js      # 23 CLI tests, against a fake relay
+node --test tests/team.test.js     # 31 team-board and computer rules
+node --test tests/cli.test.js      # 31 CLI tests, against a fake relay
 ```
 
 They cover what is easy to get silently wrong: calendar dates across DST,
@@ -161,7 +177,8 @@ restamping clocks, a concurrent delete losing to a stale edit, and a
 future schema being written back as an old one. Then open `tests/dom.test.html` in Chrome for
 50 interaction tests — they drive the real app in an iframe and report
 pass/fail in the page title, against a `?ns=test` board that never touches
-your data.
+your data — and `tests/team.dom.test.html` for 18 end-to-end team and computer
+flows (two people, one in-memory relay, scratch namespaces only).
 
 ```
 index.html   markup

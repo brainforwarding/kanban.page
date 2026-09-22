@@ -10,11 +10,15 @@ Optional device sync is the one thing that touches the network, and only after t
 A synced board is also reachable headlessly through `cli/` — same relay, same
 merge, no browser.
 
+Team boards (`docs/team.md`) and computers (`docs/computers.md`) are specified
+and reviewed there; the rules an agent can break are under "Team boards" below.
+
 ## Commands
 
 ```bash
-npm test                                                    # core + CLI, no deps
+npm test                                                    # core + team + CLI, no deps
 node --test tests/core.test.js                              # unit tests, no deps
+node --test tests/team.test.js                              # team boards + computers rules
 node --test tests/cli.test.js                               # CLI, against a fake relay
 node --test --test-name-pattern="markdown" tests/core.test.js   # one test by name
 ```
@@ -31,6 +35,13 @@ curl -s http://localhost:9223/json | grep -oE '"title": "(PASS|FAIL)[^"]*"'
 ```
 
 Per-test failures live in `window.__results` on that page. Keep the README's test counts in sync when adding tests.
+
+`tests/team.dom.test.html` drives the team and computer flows end to end: two
+people, an in-memory relay the app finds through `window.parent.__kanbanTestRelay`
+(the `testRelay` seam in `app.js`, inert unless framed by that harness), and
+scratch namespaces pinned with `?home=` so nothing touches the real personal
+board. Run each suite in a **fresh Chrome profile**: a service worker
+registered by one run serves the app shell in place of the next test page.
 
 ## Architecture
 
@@ -95,6 +106,37 @@ The modal shows the route (`from → to`) precisely because the export does not:
 **The floor never shrinks.** Events and tombstones known to be on the relay are unioned into every push, so no snapshot write (an import, an undo) can truncate the server's history. While sync is on, Import merges.
 
 **Transport retry and destructive deletion are different.** Failed pushes/pulls own one bounded retry timer even if the WebSocket still looks live. Delete-from-server never retries itself and never forgets the secret until the relay confirms `204` or `410`; otherwise the user must be able to try again with the same capability.
+
+### Team boards: the rules that keep teams and people apart
+
+**Split by board, never by card.** A board is personal or team, enforced by
+`validateSyncable(x, kind)`: a roster never lands on the personal board, and a
+team board never accepts `teams`, `teamsLeft`, `machines`, `privateSessions` —
+or a task carrying a session (the session firewall). A candidate with a roster
+is routed to its own namespace, `t-` + `teamIdOf(secret)`, before it is
+inspected; the personal board can never adopt it.
+
+**Team and computer data is v3** (`hasV3Data`), because older clients would
+drop it or overwrite it through their `fieldMt` rebuild. Boards without it stay
+v2, byte for byte. `isFutureBoard` is checked before `migrate` on every read
+path; a newer board loads read-only.
+
+**Only the personal board's own page writes it.** Team pages leave immutable
+request records (`board.req.*`: join, leave, session) that the personal page
+ingests per team with a persisted high-water mark, deleting records only after
+the write reached storage. Never write another namespace's storage directly.
+
+**Identity is attribution.** `by`/`byName` go on events only when `me` is
+known; missing means unattributed, never guessed. `me`, `meSinceClock`,
+`seenAssign`, `assigneeFilter` and the device's computer (`kanban.here`) are
+preferences and never travel. Done-by and "my week" read the log by column id
+(`doneByOf`, `aggregateWeek`'s `byIds`/`doneBy`); the live assignee never
+classifies a report row. Assignment is a task field group, not an event —
+older clients' `aggregateWeek` would read an `assign` event as a move.
+
+**Leaving is a tombstone** (`teamsLeft`), stamped past the join it ends; only
+an entry absent from the last save and present now starts a new `joinMt`.
+Export omits `teams`; imports and Undo keep the current ones (`keepMembership`).
 
 ### Rendering model and its one big gotcha
 

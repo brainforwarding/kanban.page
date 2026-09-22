@@ -74,6 +74,35 @@ const BoardI18n = (() => {
       syncLost: 'Sincronización detenida — este tablero ya no está en el servidor',
     },
   };
+
+  // Team boards and computers (docs/team.md, docs/computers.md). Kept as one
+  // block so the two locales are easy to hold side by side.
+  Object.assign(copy.en, {
+    personal: 'Personal', team: 'Team', newTeamBoard: 'New team board…', joinWithLink: 'Join with a link…',
+    pasteTeamLink: 'Paste a team link', notATeamLink: 'That link is not a team board', whoAreYou: 'Who are you?',
+    addYourName: 'Add your name', yourName: 'Your name', join: 'Join', back: 'Back',
+    assignee: 'Assignee', nobody: 'Nobody', mine: 'Mine', unassigned: 'Unassigned', newForYou: 'New', newCount: '{n} new',
+    history: 'History', created: 'created it in {stage}', movedTo: 'moved it to {stage}', assigned: 'assigned it to {name}',
+    unassignedIt: 'unassigned it', someone: 'Someone', leaveTeam: 'Leave team', leftTeam: 'Left team',
+    teamStale: 'team · as of {time}', teamOffline: 'team · offline',
+    computers: 'Computers', newComputer: 'New computer', computer: 'Computer', addComputer: 'Add a computer…',
+    here: 'here', makeHere: 'This is here', private: 'Only you see this',
+    needsUpdate: 'This board was saved by a newer version. Update to edit it.',
+    personalLinkTeams: 'This link also reaches your team boards.',
+  });
+  Object.assign(copy.es, {
+    personal: 'Personal', team: 'Equipo', newTeamBoard: 'Nuevo tablero de equipo…', joinWithLink: 'Unirse con un enlace…',
+    pasteTeamLink: 'Pega un enlace de equipo', notATeamLink: 'Ese enlace no es un tablero de equipo', whoAreYou: '¿Quién eres?',
+    addYourName: 'Añade tu nombre', yourName: 'Tu nombre', join: 'Unirse', back: 'Atrás',
+    assignee: 'Responsable', nobody: 'Nadie', mine: 'Mías', unassigned: 'Sin asignar', newForYou: 'Nueva', newCount: '{n} nuevas',
+    history: 'Historial', created: 'la creó en {stage}', movedTo: 'la movió a {stage}', assigned: 'se la asignó a {name}',
+    unassignedIt: 'quitó la asignación', someone: 'Alguien', leaveTeam: 'Salir del equipo', leftTeam: 'Saliste del equipo',
+    teamStale: 'equipo · al {time}', teamOffline: 'equipo · sin conexión',
+    computers: 'Computadores', newComputer: 'Nuevo computador', computer: 'Computador', addComputer: 'Añadir un computador…',
+    here: 'aquí', makeHere: 'Es este', private: 'Solo tú lo ves',
+    needsUpdate: 'Este tablero se guardó con una versión más nueva. Actualiza para editarlo.',
+    personalLinkTeams: 'Este enlace también da acceso a tus tableros de equipo.',
+  });
   const valid = x => x === 'es' ? 'es' : 'en';
   const t = (locale, key, vars = {}) => (copy[valid(locale)][key] || copy.en[key] || key)
     .replace(/\{(\w+)\}/g, (_, name) => vars[name] == null ? '' : vars[name]);
