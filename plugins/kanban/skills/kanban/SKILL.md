@@ -6,7 +6,7 @@ description: Log and track work on the user's kanban.page board with the `kanban
 # kanban.page board
 
 The user's board is reachable from the terminal with `kanban` (npm package
-`kanban.page`, 1.1.1 or later). Use it instead of opening a browser.
+`kanban.page`, 1.2.0 or later). Use it instead of opening a browser.
 
 ## Setup
 

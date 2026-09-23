@@ -99,6 +99,22 @@ test('add lands and appends exactly one created event', async () => {
   assert.equal(head.events.filter(e => e.type === 'created').length, 1);
 });
 
+test('a write to a board with images keeps it v4 and every image reference intact', async () => {
+  const ctx = await fixture();
+  const seeded = await ctx.fake.read();
+  const task = { id: 'tImg', title: 'has a picture', columnId: seeded.columns[0].id, order: 0, createdAt: 5000, mt: 5000, pmt: 5000, existMt: 5000 };
+  const withImages = { ...seeded, tasks: [task], attachments: {
+    a1: { task: 'tImg', blob: 'B'.repeat(22), type: 'image/webp', w: 10, h: 10, bytes: 100, at: 1, mt: 5000 },
+    a2: { task: 'tImg', blob: 'C'.repeat(22), type: 'image/png', w: 10, h: 10, bytes: 100, at: 2, mt: 5001, gone: true },
+  } };
+  await ctx.fake.seed(C.syncable(withImages));
+  await runMutation(ctx, st => ops.add(st, { title: 'from the terminal' }));
+  const head = await ctx.fake.read();
+  assert.equal(head.v, 4);
+  assert.deepEqual(head.attachments, withImages.attachments);
+  assert.ok(head.tasks.some(t => t.title === 'from the terminal'));
+});
+
 test('add advances only pmt on siblings, never mt or existMt', async () => {
   const ctx = await fixture();
   await runMutation(ctx, st => ops.add(st, { title: 'first' }));

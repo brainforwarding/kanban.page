@@ -180,7 +180,7 @@ node --test tests/core.test.js     # 114 unit tests, no dependencies
 node --test tests/team.test.js     # 32 team-board and computer rules
 node --test tests/attachments.test.js  # 15 image rules: merge, v4, crypto, headers
 node --test tests/relay.test.js    # 11 relay image routes, against in-memory storage
-node --test tests/cli.test.js      # 31 CLI tests, against a fake relay
+node --test tests/cli.test.js      # 32 CLI tests, against a fake relay
 ```
 
 They cover what is easy to get silently wrong: calendar dates across DST,

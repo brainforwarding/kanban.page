@@ -1,6 +1,6 @@
 {
   "name": "kanban.page",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Headless CLI for a synced kanban.page board — so an agent can read and edit it without driving a browser.",
   "bin": { "kanban": "cli/kanban.js" },
   "main": "core.js",
