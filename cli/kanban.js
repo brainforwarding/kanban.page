@@ -284,6 +284,7 @@ CMDS.ls = async (args, opts) => {
     tasks: opts.json ? ops.live(state).map(t => ({
       id: t.id, title: t.title, stage: ops.colName(state, t.columnId),
       project: ops.projectName(state, t), flag: !!t.flag, order: t.order,
+      session: t.session || '',
     })) : undefined,
   };
 };
