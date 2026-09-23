@@ -7,7 +7,7 @@
   "engines": { "node": ">=20" },
   "files": ["cli/", "core.js", "docs/cli.md", "docs/agents.md", "README.md", "LICENSE"],
   "scripts": {
-    "test": "node --test tests/core.test.js tests/team.test.js tests/cli.test.js"
+    "test": "node --test tests/core.test.js tests/team.test.js tests/attachments.test.js tests/relay.test.js tests/cli.test.js"
   },
   "repository": { "type": "git", "url": "git+https://github.com/brainforwarding/kanban.page.git" },
   "homepage": "https://kanban.page",

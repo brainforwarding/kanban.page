@@ -36,13 +36,35 @@ function eq(a, b, msg) { if (a !== b) throw new Error(`${msg || ''} expected ${J
 
 /* ── the fake relay: optimistic concurrency, like relay/worker.js ── */
 const slots = new Map(); // token → { ver, env }
+const blobs = new Map(); // token → Map(blobId → bytes)
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+const BLOB_QUOTA = 25 * 1024 * 1024;
 window.__kanbanTestRelay = {
   async fetch(url, opts = {}) {
     const auth = (opts.headers && (opts.headers.Authorization || opts.headers.authorization)) || '';
     const token = auth.replace(/^Bearer /, '');
     const slot = slots.get(token);
     const method = opts.method || 'GET';
+    // images beside the board, with relay/worker.js's answers
+    const blob = new URL(url).pathname.match(/^\/v1\/blob\/([A-Za-z0-9_-]{22})$/);
+    if (blob) {
+      if (slot && slot.deleted) return json({ error: 'deleted' }, 410);
+      const held = blobs.get(token) || new Map();
+      if (method === 'GET') return held.has(blob[1]) ? new Response(held.get(blob[1])) : json({ error: 'none' }, 404);
+      if (method === 'PUT') {
+        const bytes = new Uint8Array(opts.body);
+        if (bytes.length > 1_100_000) return json({ error: 'too large' }, 413);
+        if (bytes.length < 28) return json({ error: 'bad body' }, 400);
+        if (!slot) return json({ error: 'no board' }, 404);
+        if (held.has(blob[1])) return new Response(null, { status: 204 });
+        const used = [...held.values()].reduce((n, b) => n + b.length, 0);
+        if (used + bytes.length > BLOB_QUOTA || held.size >= 500) return json({ error: 'board full', used, quota: BLOB_QUOTA }, 507);
+        held.set(blob[1], bytes.slice());
+        blobs.set(token, held);
+        return new Response(null, { status: 204 });
+      }
+      return json({}, 405);
+    }
     if (method === 'GET') return slot ? json(slot) : json({ error: 'none' }, 404);
     if (method === 'PUT') {
       const { baseVer, env } = JSON.parse(opts.body);
@@ -84,7 +106,10 @@ let teamNs = null, teamSecret = null, cardId = null;
    own copy of the team board's storage and swaps it in before its turn. */
 const devices = { seb: null, andrea: null };
 let current = 'seb';
+// each simulated device has its own image database (app.js reads this seam)
+window.__kanbanTestDevice = 'seb';
 function become(who) {
+  window.__kanbanTestDevice = who;
   if (who === current) return;
   const keys = [`board.v2.${teamNs}`, `board.sync.${teamNs}`];
   devices[current] = Object.fromEntries(keys.map(k => [k, ls().getItem(k)]));
@@ -287,6 +312,77 @@ function become(who) {
     const t = W.__board.state.tasks.find(x => x.id === cardId);
     assert(!W.privateSessionFor(cardId), 'and not Sebastián\'s session');
     assert(!t.session);
+  });
+
+  await test('an image Andrea adds reaches Sebastián through the relay, sealed, on his own device', async () => {
+    // Andrea is on the team page from the previous test
+    W.openEditor(cardId);
+    const c = D.createElement('canvas'); c.width = 64; c.height = 48;
+    c.getContext('2d').fillStyle = '#FF8FA3'; c.getContext('2d').fillRect(0, 0, 64, 48);
+    const file = new W.File([await new Promise(r => c.toBlob(r, 'image/png'))], 'bug.png', { type: 'image/png' });
+    W.addImageFiles([file]);
+    await until(() => D.querySelector('.img-notice'), 2000, 'the first team image asks once');
+    D.querySelector('.img-notice [data-a="ok"]').click();
+    await until(() => D.querySelector('#f-images .img-tile.ready'), 4000, 'never prepared');
+    W.saveEditor();
+    await sleep(250);
+    const att = Object.values(W.__board.state.attachments).find(a => a.task === cardId);
+    eq(att.byName, 'Andrea', 'attributed to who added it');
+    eq(W.BoardCore.syncable(W.__board.state).v, 4, 'images make the board v4');
+    eq(W.__board.state.imageNoticeSeen, true);
+    await W.push();
+    await until(async () => { const k = await W.BoardCore.deriveSync(teamSecret); return (blobs.get(k.token) || new Map()).has(att.blob); }, 4000, 'the bytes never reached the relay');
+    const k = await W.BoardCore.deriveSync(teamSecret);
+    const sealed = blobs.get(k.token).get(att.blob);
+    assert(!W.BoardCore.imageInfo(sealed), 'the relay holds ciphertext, not an image');
+    const remote = await relayBoard(teamSecret);
+    assert(!('imageNoticeSeen' in remote), 'the notice answer never travels');
+    eq(remote.attachments[Object.keys(remote.attachments)[0]].blob, att.blob, 'the reference travelled');
+
+    await go(home());
+    become('seb');
+    await go(teamUrl(teamNs));
+    await W.pull(); await sleep(150);
+    assert(D.querySelector(`.card[data-id="${cardId}"] .imgcount`), 'his card counts the image');
+    W.openEditor(cardId);
+    await until(() => D.querySelector('#f-images .img-tile.ready img'), 4000, 'the image never arrived');
+    W.closeEditor();
+  });
+
+  await test('an image whose bytes land after its reference appears without another board change', async () => {
+    // Sebastián is on the team page. A reference arrives with no bytes behind it.
+    const k = await W.BoardCore.deriveSync(teamSecret);
+    const blobId = W.BoardCore.newBlobId();
+    const c = D.createElement('canvas'); c.width = 40; c.height = 30;
+    c.getContext('2d').fillStyle = '#7ED67A'; c.getContext('2d').fillRect(0, 0, 40, 30);
+    const plain = new Uint8Array(await (await new Promise(r => c.toBlob(r, 'image/png'))).arrayBuffer());
+    const st = W.__board.state;
+    st.attachments = { ...st.attachments, late1: { task: cardId, blob: blobId, type: 'image/png', w: 40, h: 30, bytes: plain.length, at: Date.now() } };
+    W.save(); await sleep(200);
+    W.openEditor(cardId);
+    await until(() => D.querySelector('#f-images .img-tile.arriving'), 3000, 'shown as arriving');
+    // the sender's upload lands; nothing on the board changes
+    const sealed = await W.BoardCore.sealBlob(await W.BoardCore.deriveBlobKey(teamSecret), blobId, plain);
+    const held = blobs.get(k.token) || new Map(); held.set(blobId, sealed); blobs.set(k.token, held);
+    await until(() => D.querySelectorAll('#f-images .img-tile.ready img').length === 2, 8000, 'never looked again');
+    W.closeEditor();
+  });
+
+  await test('a closed first-image notice never follows you to another card', async () => {
+    const other = W.addTask({ title: 'Another card', columnId: W.__board.state.columns[0].id });
+    await sleep(150);
+    W.__board.state.imageNoticeSeen = false;
+    W.openEditor(cardId);
+    const f = new W.File([new Uint8Array([0x89, 0x50, 0x4E, 0x47])], 'secret.png', { type: 'image/png' });
+    W.addImageFiles([f]);
+    await until(() => D.querySelector('.img-notice'));
+    W.closeEditor();
+    W.openEditor(other.id);
+    await sleep(100);
+    assert(!D.querySelector('.img-notice'), 'the notice stayed with its card');
+    eq(W.draftImageList().length, 0, 'and nothing was queued here');
+    W.closeEditor();
+    W.__board.state.imageNoticeSeen = true;
   });
 
   await test('the team payload firewall refuses a session outright', async () => {

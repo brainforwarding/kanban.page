@@ -10,6 +10,11 @@ const clone = o => JSON.parse(JSON.stringify(o));
 const EASE = 'cubic-bezier(.2,.8,.25,1)';
 
 const ICON = {
+  image: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2.2" y="3" width="11.6" height="10" rx="1.8"/><circle cx="5.9" cy="6.5" r="1.1"/><path d="M2.6 11.6l3.6-3.3 2.6 2.3 1.9-1.6 2.9 2.6"/></svg>',
+  trash: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.4 4.5V3h3.2v1.5M4.4 4.5l.6 8.5h6l.6-8.5"/></svg>',
+  download: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.8v7.4M4.9 7.3L8 10.4l3.1-3.1M3 13h10"/></svg>',
+  prev: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5L5.5 8l4.5 4.5"/></svg>',
+  next: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>',
   plus:  '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3.4v9.2M3.4 8h9.2"/></svg>',
   more:  '<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.6" cy="8" r="1.2"/></svg>',
   close: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6"/></svg>',
@@ -148,6 +153,7 @@ function applyLocale() {
   $('#f-title').placeholder = tr('what');
   $('#f-notes').placeholder = tr('notes');
   $('#projectLabel').textContent = tr('project');
+  $('#imagesLabel').textContent = tr('images');
   $('#sessionLabel').textContent = tr('session');
   $('#f-session-copy').title = tr('copy');
   $('#f-archive').textContent = tr('archive');
@@ -235,6 +241,9 @@ function linkedReplacement(remote) {
     filter: state.filter,
   };
   const next = C.migrate({ ...state, ...clone(remote), ...prefs });
+  // docs/attachments.md: the old board's image references must not ride
+  // along into the board being joined (and so never upload there).
+  if (remote.attachments) next.attachments = clone(remote.attachments); else delete next.attachments;
   if (next.filter && !(next.projects || []).some(p => p.id === next.filter)) next.filter = null;
   delete next.seed;
   return next;
@@ -407,6 +416,20 @@ let syncRuntimeEpoch = 0;
 let syncBindingSuspended = false;
 let syncIncompatible = false; // the remote head can never be applied here
 
+// Image transport state (docs/attachments.md) — declared here, beside the
+// sync globals, because suspendSyncRuntime resets it and can run during boot.
+const imgFail = new Map();   // blobId → 'full' | 'large' — permanent for this relationship
+let boardFull = null;        // { used, quota } from the relay's 507
+let uploading = false, uploadAgain = false;
+let imgQueueOwner = 0;       // one queue per sync session; a new one takes over
+let imgRetryTimer = null, imgRetryMs = 15000;
+let uploadingNow = null;     // blobId in flight, for the status line
+const imgUrls = new Map();   // blobId → object URL, for this page's life
+const imgTried = new Map();  // blobId → last GET that found nothing
+const imgWaiting = new Set();
+let arrivingTimer = null, arrivingTries = 0;
+let liveImgIndex = null;
+
 try {
   const held = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null');
   if (held && !readOnly && sameGen(bindingGenOf(held), bindingGenOf(state))) sync = held;
@@ -437,6 +460,7 @@ const isCurrentSync = ctx => !!(ctx && sync
     caller; this only cuts the live wire. */
 function suspendSyncRuntime() {
   syncRuntimeEpoch++;
+  resetImageQueue();
   clearTimeout(pushTimer);
   pushTimer = null;
   clearSyncRetry();
@@ -595,7 +619,7 @@ function applyRemote(remote, ver, ctx = captureSync()) {
     if (/newer than this client|cannot land|needs its roster/.test(bad)) syncIncompatible = true;
     return;
   }
-  floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
+  floor = { events: remote.events || [], tombstones: remote.tombstones || {}, attachments: remote.attachments || {} };
   if (syncBusy()) { pendingRemote = { remote, ver, ctx }; return; }
   sync.ver = ver;
   saveSyncConfig();
@@ -615,6 +639,7 @@ function applyRemote(remote, ver, ctx = captureSync()) {
   }
   save(); // persist the union; schedules a push-back only if we knew more
   clearOrphanSessions();
+  imagesAfterPull();
   const current = syncableStr(state);
   setSyncStatus(current === rejectedPayload && current !== remoteHead ? 'error' : 'ok');
   syncedAt = Date.now();
@@ -703,12 +728,13 @@ async function push(opts = {}) {
         saveSyncConfig();
         remoteHead = snap;
         rejectedPayload = '';
-        floor = { events: payload.events, tombstones: payload.tombstones };
+        floor = { events: payload.events, tombstones: payload.tombstones, attachments: payload.attachments || {} };
         joiningOrder = false; // the adoption has settled
         clearSyncRetry();
         setSyncStatus('ok');
         syncedAt = Date.now();
         if (syncableStr(state) !== snap) schedulePush(300); // edits landed mid-flight
+        uploadImages(); // the board is on the relay: its images may follow
         return;
       }
       if (res.status === 409) {
@@ -769,12 +795,13 @@ async function pull() {
     if (ver !== sync.ver) {
       applyRemote(remote, ver, ctx);
     } else {
-      floor = { events: remote.events || [], tombstones: remote.tombstones || {} };
+      floor = { events: remote.events || [], tombstones: remote.tombstones || {}, attachments: remote.attachments || {} };
       remoteHead = normalized(remote);
       const current = syncableStr(state);
       if (current === remoteHead) {
         clearSyncRetry();
         setSyncStatus('ok');
+        uploadImages(); // in step: anything added offline can follow now
       } else if (current === rejectedPayload) {
         setSyncStatus('error'); // focus/pull must not disguise a blocked 413
       } else {
@@ -1093,7 +1120,7 @@ function commitCandidate(mode) {
   syncKeys = { secret: candidate.secret, ...candidate.keys };
   remoteHead = normalized(candidate.remote);
   rejectedPayload = '';
-  floor = { events: candidate.remote.events || [], tombstones: candidate.remote.tombstones || {} };
+  floor = { events: candidate.remote.events || [], tombstones: candidate.remote.tombstones || {}, attachments: candidate.remote.attachments || {} };
   joiningOrder = mode === 'combine';
   saveSyncConfig(); // board was written first and carries the matching binding
   syncNoticeKey = mode === 'combine' ? 'combinedLinked' : 'connectedLinked';
@@ -1287,6 +1314,7 @@ const tasksIn = colId => state.tasks
   .sort((a, b) => a.order - b.order);
 
 function render() {
+  liveImgIndex = null;
   document.documentElement.dataset.theme = state.theme;
   document.documentElement.dataset.density = state.density;
   renderSwitcher();
@@ -1440,6 +1468,8 @@ function cardEl(t) {
   const doneWho = doneBy ? (memberOf(doneBy.by) || { name: doneBy.byName || '?' }) : null;
   const fresh = isNewForMe(t);
   if (fresh) el.classList.add('fresh');
+  const imgs = imagesOf(t.id);
+  const imgBy = IS_TEAM && imgs.length ? memberOf(imgs[imgs.length - 1].by) : null;
 
   el.innerHTML = `
     <span class="edge"></span>
@@ -1447,9 +1477,10 @@ function cardEl(t) {
     ${fresh ? `<span class="newtag">${esc(tr('newForYou'))}</span>` : ''}
     <h3>${esc(t.title)}</h3>
     ${t.notes ? `<p class="note">${esc(t.notes)}</p>` : ''}
-    ${p || since || assignee || doneWho ? `<div class="meta">
+    ${p || since || assignee || doneWho || imgs.length ? `<div class="meta">
         ${p ? `<span class="proj">${esc(p.name)}</span>` : ''}
         <span class="grow"></span>
+        ${imgs.length ? `<span class="imgcount" title="${esc(tr(imgs.length === 1 ? 'oneImage' : 'nImages').replace('{n}', imgs.length))}">${ICON.image}${imgs.length}${imgBy ? avatarHtml(imgBy, 'xs') : ''}</span>` : ''}
         ${doneWho ? `<span class="doneby" title="${esc(doneWho.name)}">✓ ${esc(initials(doneWho.name))} · ${esc(age(doneBy.at) || tr('today'))}</span>` : ''}
         ${since && !doneWho ? `<span class="age" title="Untouched for ${since}">${since}</span>` : ''}
         ${assignee ? avatarHtml(assignee, 'sm') : ''}
@@ -2094,6 +2125,7 @@ function openEditor(id, colId) {
   const t = id ? byId(id) : null;
   editing = t ? t.id : 'new';
   draft = t ? clone(t) : {
+    id: C.uid(), // minted now, so an image still preparing knows its card
     title: '', notes: '', projectId: state.filter || null, session: '',
     flag: state.flagFilter || false, columnId: colId || state.columns[0].id,
     ...(IS_TEAM && state.assigneeFilter === 'mine' && state.me ? { assigneeId: state.me } : {}),
@@ -2119,6 +2151,7 @@ function openEditor(id, colId) {
   renderStage();
   renderProjectChooser();
   syncFlagBtn();
+  beginDraftImages(t ? t.id : draft.id);
 
   scrim.hidden = false;
   editor.hidden = false;
@@ -2161,7 +2194,7 @@ function renderProjectChooser() {
   add.className = 'pill add';
   add.title = 'Projects';
   add.innerHTML = ICON.plus;
-  add.onclick = () => { closeEditor(); openProjects(); };
+  add.onclick = () => { saveEditor(); openProjects(); }; // closing = saving
   fProject.append(add);
 }
 
@@ -2176,6 +2209,8 @@ function saveEditor() {
   draft.notes = fNotes.value.trim();
   draft.session = fSession.value.trim();
   if (!draft.session) { draft.sessionMachine = null; draft.sessionCwd = null; }
+  // Closing = saving: a card that is only a picture is still a card.
+  if (!draft.title && draftImgs && draftImgs.adds.length) draft.title = imageTitle(draftImgs.adds[0]);
 
   if (!draft.title) { closeEditor(); return; }
 
@@ -2220,6 +2255,7 @@ function saveEditor() {
     save();
     render();
   }
+  if (savedId) { commitDraftImages(savedId); save(); render(); }
   closeEditor();
   // After the barrier lifts (closeEditor applies held remote changes): a card
   // deleted meanwhile gets no private session — a session edit must never be
@@ -2231,6 +2267,8 @@ function saveEditor() {
 }
 
 function closeEditor() {
+  endDraftImages();
+  closeLightbox();
   editor.hidden = true;
   editing = null;
   draft = null;
@@ -2254,8 +2292,9 @@ $('#f-session-copy').onclick = async () => {
   setTimeout(() => { wrap.classList.remove('copied'); btn.innerHTML = ICON.copy; }, 1200);
 };
 $('#f-archive').onclick = () => {
-  const t = byId(editing);
-  closeEditor();
+  const id = editing;
+  saveEditor(); // closing = saving: typed text and new images land first
+  const t = byId(id);
   if (!t) return;
   archiveTasks([t]);
   toast(tr('taskArchived'), undo);
@@ -3015,28 +3054,40 @@ function toggleDensity() {
   save();
 }
 
-function exportBackup() {
-  // A backup travels; team secrets and device bookkeeping stay home.
-  const blob = new Blob([JSON.stringify(C.exportable(state), null, 2)], { type: 'application/json' });
+async function exportBackup() {
+  // A backup travels; team secrets and device bookkeeping stay home. It
+  // carries the image bytes too, and says so when it could not get them all.
+  const out = C.exportable(state);
+  const { images, missing } = C.liveAttachments(state).length ? await backupImages() : { images: {}, missing: [] };
+  if (Object.keys(images).length) out.images = images;
+  if (missing.length) out.imagesMissing = missing;
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `board-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  toast('Backup saved');
+  toast(missing.length ? tr('backupPartial').replace('{n}', missing.length) : 'Backup saved', null, missing.length ? 8000 : 5200);
 }
 
 $('#importFile').addEventListener('change', async e => {
   const file = e.target.files[0];
   if (!file) return;
   try {
+    if (file.size > 200 * 1024 * 1024) throw new Error('size');
     const next = JSON.parse(await file.text());
+    // image bytes go to the device store, never into board state — and only
+    // once the file has proved to be a board this page may import
+    const images = { images: next.images, attachments: next.attachments };
+    delete next.images;
+    delete next.imagesMissing;
     if (!Array.isArray(next.columns) || !Array.isArray(next.tasks)) throw new Error('shape');
     if (C.isFutureBoard(next) || readOnly) throw new Error('newer');
     // a backup never carries team secrets (exportable), and a file from the
     // other kind of board cannot be imported over this one
     for (const k of ['teams', 'teamsLeft', 'teamsReqApplied']) delete next[k];
     if (C.validateSyncable({ ...next, v: 2 }, KIND)) throw new Error('kind');
+    await restoreImages(images);
     snapshot(!sync);
     const incoming = keepMembership(C.migrate(next), state); // also upgrades a v1 backup on the way in
     // While synced, importing MERGES. A replace would push a snapshot that
@@ -3146,6 +3197,10 @@ function keepMembership(next, from) {
   for (const k of KEEP_ACROSS_SNAPSHOTS) {
     if (from[k] !== undefined) next[k] = clone(from[k]); else delete next[k];
   }
+  // Images are a set: a snapshot neither drops one a teammate added since
+  // nor revives one removed since — per key, the newer entry stands.
+  const images = C.unionFloor({ attachments: next.attachments }, { attachments: from.attachments }).attachments;
+  if (images) next.attachments = clone(images); else delete next.attachments;
   return next;
 }
 
@@ -3237,6 +3292,19 @@ $('#newTask').onclick = () => openEditor(null);
 const RESUME = /\b(?:claude|codex)\b.*\bresume\b/i;
 
 document.addEventListener('paste', e => {
+  // An image: into the open editor wherever the caret is, or on the bare
+  // board as a new card — ahead of resume text in the same clipboard.
+  const images = clipboardImages(e);
+  if (images.length) {
+    if (!editor.hidden) { e.preventDefault(); addImageFiles(images); return; }
+    const typingElsewhere = /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable;
+    if (!typingElsewhere && panel.hidden && reportEl.hidden && archiveEl.hidden && syncEl.hidden && !readOnly) {
+      e.preventDefault();
+      openEditor(null);
+      addImageFiles(images);
+      return;
+    }
+  }
   if (/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable) return;
   if (!editor.hidden || !panel.hidden || !reportEl.hidden || !archiveEl.hidden || !syncEl.hidden) return;
 
@@ -3255,6 +3323,10 @@ document.addEventListener('paste', e => {
 document.addEventListener('keydown', e => {
   const typing = /^(INPUT|TEXTAREA)$/.test(e.target.tagName) || e.target.isContentEditable;
 
+  if (lightboxEl) {
+    if (e.key === 'Escape') { e.preventDefault(); closeLightbox(); return; }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); stepLightbox(e.key === 'ArrowLeft' ? -1 : 1); return; }
+  }
   if (e.key === 'Escape') {
     if (!menu.hidden) { menu.hidden = true; return; }
     if (!weeksEl.hidden) { weeksEl.hidden = true; return; }
@@ -4505,6 +4577,744 @@ function rowsFrom(board, ns, label, onlyMe) {
     r.done = doneCol.name;
   });
   return rows;
+}
+
+/* ── images (docs/attachments.md) ──────────────────────────
+   The board carries references only. Bytes live in IndexedDB on this device
+   and, sealed with a key of their own, beside the board on the relay. Nothing
+   here ever touches a board push: a push carries references and never waits. */
+
+const IMG_EDGE = 1600;
+const IMG_SOURCE_MAX = 25 * 1024 * 1024;
+const IMG_PIXELS_MAX = 40e6;
+const IMG_PNG_KEEP = 600_000;
+const IMG_CACHE_CAP = 200 * 1024 * 1024;
+const IMG_NS = NS || '';
+// The team DOM suite simulates two devices in one origin; each gets its own
+// database through the same seam that gives it a relay. Inert otherwise.
+const IMG_DB = 'kanban.images' + (testRelay && window.parent.__kanbanTestDevice ? '.' + window.parent.__kanbanTestDevice : '');
+
+let imgDbP = null;
+function imgDb() {
+  if (!imgDbP) {
+    imgDbP = new Promise((resolve, reject) => {
+      // Keyed by [ns, blobId]: one board's bytes can never answer for another's.
+      const req = indexedDB.open(IMG_DB, 2);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (db.objectStoreNames.contains('blobs')) db.deleteObjectStore('blobs'); // v1 never shipped
+        const store = db.createObjectStore('blobs', { keyPath: ['ns', 'blobId'] });
+        store.createIndex('nsSha', ['ns', 'sha']);
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    imgDbP.catch(() => { imgDbP = null; });
+  }
+  return imgDbP;
+}
+const idbReq = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const idbDone = tx => new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onerror = tx.onabort = () => rej(tx.error); });
+async function imgGet(id) { return idbReq((await imgDb()).transaction('blobs').objectStore('blobs').get([IMG_NS, id])); }
+async function imgAll() { return idbReq((await imgDb()).transaction('blobs').objectStore('blobs').getAll()); }
+async function imgBySha(sha) {
+  return idbReq((await imgDb()).transaction('blobs').objectStore('blobs').index('nsSha').get([IMG_NS, sha]));
+}
+async function imgPut(rec) {
+  const tx = (await imgDb()).transaction('blobs', 'readwrite');
+  tx.objectStore('blobs').put(rec);
+  return idbDone(tx);
+}
+/** `keys` are blob ids on this board, or [ns, blobId] pairs. */
+async function imgDelete(keys) {
+  if (!keys.length) return;
+  const tx = (await imgDb()).transaction('blobs', 'readwrite');
+  keys.forEach(k => {
+    const key = Array.isArray(k) ? k : [IMG_NS, k];
+    tx.objectStore('blobs').delete(key);
+    if (key[0] === IMG_NS && imgUrls.has(key[1])) { URL.revokeObjectURL(imgUrls.get(key[1])); imgUrls.delete(key[1]); }
+  });
+  return idbDone(tx);
+}
+
+async function sha256Hex(bytes) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return [...d].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/* The live-image index: one pass over the map per render, not per card. */
+function imagesOf(taskId) {
+  if (!liveImgIndex) {
+    liveImgIndex = new Map();
+    for (const a of C.liveAttachments(state)) {
+      if (!liveImgIndex.has(a.task)) liveImgIndex.set(a.task, []);
+      liveImgIndex.get(a.task).push(a);
+    }
+  }
+  return liveImgIndex.get(taskId) || [];
+}
+const liveBlobIds = () => new Set(C.liveAttachments(state).map(a => a.blob));
+
+/* ── preparing: every image is re-encoded, so no metadata leaves ── */
+
+function encodeCanvas(canvas, type, q) {
+  return new Promise(res => {
+    try { canvas.toBlob(b => res(b), type, q); } catch (err) { res(null); }
+  });
+}
+
+async function decodeImage(file) {
+  if (typeof createImageBitmap === 'function') {
+    try { return await createImageBitmap(file); } catch (err) { /* fall back to an <img> */ }
+  }
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    return img;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** File → { blob, type, w, h, bytes, sha, name }. Throws 'type' | 'large' | 'decode'. */
+async function prepareImage(file) {
+  if (!file || file.size > IMG_SOURCE_MAX) throw new Error('large');
+  const head = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer());
+  const info = C.imageInfo(head);
+  if (!info || !C.IMAGE_TYPES.includes(info.type)) throw new Error('type');
+  if (info.w * info.h > IMG_PIXELS_MAX) throw new Error('large');
+  let src;
+  try { src = await decodeImage(file); } catch (err) { throw new Error('decode'); }
+  const sw = src.width || src.naturalWidth, sh = src.height || src.naturalHeight;
+  try {
+    if (!sw || !sh || sw * sh > IMG_PIXELS_MAX) throw new Error('decode');
+    const k = Math.min(1, IMG_EDGE / Math.max(sw, sh));
+    const w = Math.max(1, Math.round(sw * k)), h = Math.max(1, Math.round(sh * k));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const g = canvas.getContext('2d');
+    g.drawImage(src, 0, 0, w, h);
+    let out = null;
+    if (info.type === 'image/png') {
+      const png = await encodeCanvas(canvas, 'image/png');
+      if (png && png.type === 'image/png' && png.size <= IMG_PNG_KEEP) out = png;
+    }
+    if (!out) {
+      const webp = await encodeCanvas(canvas, 'image/webp', 0.82);
+      if (webp && webp.type === 'image/webp') out = webp;
+    }
+    if (!out) {
+      // no WebP encoder here: JPEG has no alpha, so give it a white ground
+      g.globalCompositeOperation = 'destination-over';
+      g.fillStyle = '#fff';
+      g.fillRect(0, 0, w, h);
+      const jpg = await encodeCanvas(canvas, 'image/jpeg', 0.85);
+      if (jpg && jpg.type === 'image/jpeg') out = jpg;
+    }
+    if (!out) throw new Error('decode');
+    if (out.size > C.MAX_IMAGE) throw new Error('large');
+    const bytes = new Uint8Array(await out.arrayBuffer());
+    const name = String(file.name || '').slice(0, 120);
+    return { blob: new Blob([bytes], { type: out.type }), type: out.type, w, h, bytes: bytes.length, sha: await sha256Hex(bytes), name };
+  } finally {
+    if (src.close) src.close();
+  }
+}
+
+/** Prepared image → a committed local record. The reference is added only
+    after this resolves, so a failed write can never leave a dangling card. */
+async function storeImage(prep) {
+  const held = await imgBySha(prep.sha).catch(() => null);
+  if (held) return held.blobId; // the same picture on this board: one blob
+  const blobId = C.newBlobId();
+  await imgPut({ blobId, ns: IMG_NS, type: prep.type, bytes: prep.blob, sha: prep.sha, sentTo: [], used: Date.now() });
+  return blobId;
+}
+
+/** Local bytes nothing references any more — only ever a discarded draft's. */
+async function dropIfUnreferenced(blobIds) {
+  const held = new Set(Object.values(state.attachments || {}).map(a => a.blob));
+  if (draftImgs) draftImgs.adds.forEach(a => a.blob && held.add(a.blob));
+  const gone = blobIds.filter(id => id && !held.has(id));
+  try {
+    for (const id of gone) {
+      const rec = await imgGet(id);
+      if (rec && !(rec.sentTo || []).length) await imgDelete([id]);
+    }
+  } catch (err) { /* nothing else depends on this */ }
+}
+
+let persistAsked = false;
+function requestPersist() {
+  if (persistAsked) return;
+  persistAsked = true;
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (err) { /* best effort */ }
+}
+
+/* ── the relay: one session, one queue ── */
+
+let blobKeys = null; // { secret, key, fp }
+async function blobKeysFor(ctx) {
+  if (blobKeys && blobKeys.secret === ctx.secret) return blobKeys;
+  const derived = await keysForContext(ctx);
+  const next = {
+    secret: ctx.secret,
+    key: await C.deriveBlobKey(ctx.secret),
+    // which relay slot a record has reached: 128 bits of SHA-256(token)
+    fp: (await sha256Hex(new TextEncoder().encode(derived.token))).slice(0, 32),
+  };
+  if (!isCurrentSync(ctx)) throw new Error('stale sync');
+  blobKeys = next;
+  return next;
+}
+
+async function blobFetch(method, blobId, body, ctx) {
+  const derived = await keysForContext(ctx);
+  return relayHttp(`${RELAY}/v1/blob/${blobId}`, {
+    method,
+    headers: { Authorization: `Bearer ${derived.token}`, ...(body ? { 'Content-Type': 'application/octet-stream' } : {}) },
+    body: body || undefined,
+  });
+}
+
+
+/** Called when the sync relationship changes: the old queue stops owning
+    anything, and what it learned about the old slot is forgotten. */
+function resetImageQueue() {
+  imgQueueOwner++;
+  uploading = false;
+  uploadAgain = false;
+  clearTimeout(imgRetryTimer);
+  imgRetryTimer = null;
+  imgRetryMs = 15000;
+  imgFail.clear();
+  boardFull = null;
+  uploadingNow = null;
+  clearTimeout(arrivingTimer);
+  arrivingTimer = null;
+  imgTried.clear();
+}
+
+async function uploadImages() {
+  if (uploading) { uploadAgain = true; return; }
+  const ctx = captureSync();
+  if (!isCurrentSync(ctx) || !((sync.ver || 0) > 0) || readOnly || syncIncompatible) return;
+  const owner = imgQueueOwner;
+  const mine = () => owner === imgQueueOwner && isCurrentSync(ctx);
+  uploading = true;
+  let failed = false;
+  try {
+    const { key, fp } = await blobKeysFor(ctx);
+    for (const blobId of liveBlobIds()) {
+      if (!mine()) return;
+      if (imgFail.has(blobId)) continue;
+      const rec = await imgGet(blobId).catch(() => null);
+      if (!mine()) return;
+      if (!rec || (rec.sentTo || []).includes(fp)) continue;
+      const sealed = await C.sealBlob(key, blobId, new Uint8Array(await rec.bytes.arrayBuffer()));
+      if (!mine()) return;
+      uploadingNow = blobId;
+      refreshImageViews();
+      const res = await blobFetch('PUT', blobId, sealed, ctx);
+      if (!mine()) return;
+      if (res.status === 204) {
+        const fresh = await imgGet(blobId).catch(() => null) || rec;
+        fresh.sentTo = [...new Set([...(fresh.sentTo || []), fp])];
+        await imgPut(fresh);
+      } else if (res.status === 507) {
+        const body = await res.json().catch(() => ({}));
+        if (!mine()) return;
+        boardFull = { used: body.used || 0, quota: body.quota || 0 };
+        imgFail.set(blobId, 'full');
+      } else if (res.status === 413 || res.status === 400) {
+        imgFail.set(blobId, 'large');
+      } else if (res.status === 404 || res.status === 410) {
+        break; // the board is not (or no longer) on the relay; a push brings us back
+      } else {
+        throw new Error(`relay ${res.status}`);
+      }
+    }
+    imgRetryMs = 15000;
+  } catch (err) {
+    failed = mine();
+  } finally {
+    // only the owner releases the lock; a superseded queue touches nothing
+    if (owner === imgQueueOwner) {
+      uploading = false;
+      uploadingNow = null;
+      refreshImageViews();
+    }
+  }
+  if (owner !== imgQueueOwner) return;
+  if (failed) {
+    // Its own bounded retry: an unchanged board never pushes again, so
+    // waiting for the next push could wait forever.
+    clearTimeout(imgRetryTimer);
+    imgRetryTimer = setTimeout(uploadImages, imgRetryMs);
+    imgRetryMs = Math.min(imgRetryMs * 2, 300000);
+  } else if (uploadAgain) {
+    uploadAgain = false;
+    uploadImages();
+  }
+}
+
+// An image whose reference arrived before its bytes. Blob uploads do not move
+// the board's version, so no pull will say they landed: look again on a
+// timer while the editor is open — soon at first, then every 30 s.
+function scheduleArriving() {
+  if (arrivingTimer || !draftImgs) return;
+  const gen = draftImgs.gen;
+  const ctx = captureSync();
+  arrivingTimer = setTimeout(() => {
+    arrivingTimer = null;
+    if (!draftImgs || draftImgs.gen !== gen || !isCurrentSync(ctx)) return;
+    arrivingTries++;
+    imgTried.clear();
+    refreshImageViews();
+  }, [3000, 8000, 15000][arrivingTries] || 30000);
+}
+
+/** An attachment → { url } or { state: 'arriving' | 'missing' }. */
+async function imageUrl(a) {
+  if (imgUrls.has(a.blob)) return { url: imgUrls.get(a.blob) };
+  const rec = await imgGet(a.blob).catch(() => null);
+  if (rec) {
+    if (!imgUrls.has(a.blob)) imgUrls.set(a.blob, URL.createObjectURL(rec.bytes));
+    rec.used = Date.now();
+    imgPut(rec).catch(() => {});
+    return { url: imgUrls.get(a.blob) };
+  }
+  const ctx = captureSync();
+  if (!isCurrentSync(ctx)) return { state: 'missing' };
+  const last = imgTried.get(a.blob);
+  if (last) { scheduleArriving(); return { state: 'arriving' }; }
+  if (imgWaiting.has(a.blob)) return { state: 'arriving' };
+  imgWaiting.add(a.blob);
+  try {
+    const res = await blobFetch('GET', a.blob, null, ctx);
+    if (!isCurrentSync(ctx)) return { state: 'missing' };
+    if (res.status !== 200) { imgTried.set(a.blob, Date.now()); scheduleArriving(); return { state: 'arriving' }; }
+    const sealed = new Uint8Array(await res.arrayBuffer());
+    const { key, fp } = await blobKeysFor(ctx);
+    const bytes = await C.unsealBlob(key, a.blob, sealed);
+    if (!isCurrentSync(ctx)) return { state: 'missing' };
+    const info = C.imageInfo(bytes);
+    if (!info) return { state: 'missing' };
+    const blob = new Blob([bytes], { type: info.type });
+    await imgPut({ blobId: a.blob, ns: IMG_NS, type: info.type, bytes: blob, sha: await sha256Hex(bytes), sentTo: [fp], used: Date.now() });
+    imgTried.delete(a.blob);
+    if (!imgUrls.has(a.blob)) imgUrls.set(a.blob, URL.createObjectURL(blob));
+    evictImages();
+    return { url: imgUrls.get(a.blob) };
+  } catch (err) {
+    imgTried.set(a.blob, Date.now());
+    scheduleArriving();
+    return { state: 'arriving' };
+  } finally {
+    imgWaiting.delete(a.blob);
+  }
+}
+
+/** Above the cap, drop the least recently opened images that a relay holds.
+    A record that has reached no relay may be the only copy: never evicted. */
+let evicting = false;
+async function evictImages() {
+  if (evicting) return;
+  evicting = true;
+  try {
+    const all = await imgAll();
+    let total = all.reduce((n, r) => n + (r.bytes ? r.bytes.size : 0), 0);
+    if (total <= IMG_CACHE_CAP) return;
+    const drop = [];
+    for (const r of all.filter(r => (r.sentTo || []).length).sort((x, y) => (x.used || 0) - (y.used || 0))) {
+      if (total <= IMG_CACHE_CAP) break;
+      drop.push([r.ns, r.blobId]);
+      total -= r.bytes ? r.bytes.size : 0;
+    }
+    await imgDelete(drop);
+  } catch (err) { /* best effort */ } finally { evicting = false; }
+}
+
+function imagesAfterPull() {
+  imgTried.clear(); // something changed: arriving images may be there now
+  refreshImageViews();
+  uploadImages();
+}
+
+/* ── the editor's draft images: bound to one opening ── */
+
+let editorGen = 0;
+const editorOutcome = new Map(); // gen → { saved: taskId } | { discarded: true }
+let draftImgs = null;            // { gen, taskId, adds: [], removes: Set }
+
+function beginDraftImages(taskId) {
+  draftImgs = { gen: ++editorGen, taskId, adds: [], removes: new Set(), dropped: [] };
+  arrivingTries = 0;
+  renderImages();
+}
+
+function commitDraftImages(taskId) {
+  if (!draftImgs) return;
+  const ready = draftImgs.adds.filter(a => !a.preparing);
+  if (ready.length || draftImgs.removes.size) state.attachments = { ...(state.attachments || {}) };
+  for (const a of ready) state.attachments[a.id] = attachmentEntry(a, taskId);
+  for (const id of draftImgs.removes) {
+    if (state.attachments[id]) state.attachments[id] = { ...state.attachments[id], gone: true };
+  }
+  draftImgs.saved = taskId;
+}
+
+function attachmentEntry(a, taskId) {
+  const who = me();
+  const out = { task: taskId, blob: a.blob, type: a.type, w: a.w, h: a.h, bytes: a.bytes, at: a.at };
+  if (a.name) out.name = a.name;
+  if (who) { out.by = who.id; out.byName = who.name; }
+  return out;
+}
+
+function endDraftImages() {
+  if (!draftImgs) return;
+  const d = draftImgs;
+  draftImgs = null;
+  if (noticeFiles && noticeFiles.gen === d.gen) noticeFiles = null;
+  clearTimeout(arrivingTimer);
+  arrivingTimer = null;
+  if (d.saved) {
+    editorOutcome.set(d.gen, { saved: d.saved });
+    // images added then removed before saving: free them once their Undo is gone
+    const dropped = d.dropped.map(a => a.blob);
+    if (dropped.length) setTimeout(() => dropIfUnreferenced(dropped), 9000);
+  } else {
+    editorOutcome.set(d.gen, { discarded: true });
+    dropIfUnreferenced(d.adds.concat(d.dropped).map(a => a.blob));
+  }
+}
+
+const imageTitle = a => (a && a.name ? a.name.replace(/\.[a-z0-9]+$/i, '') : '') || tr('image');
+
+function clipboardImages(e) {
+  const items = [...((e.clipboardData && e.clipboardData.items) || [])];
+  return items.filter(it => it.kind === 'file' && /^image\//.test(it.type))
+    .map(it => it.getAsFile()).filter(Boolean);
+}
+
+let noticeFiles = null;
+async function addImageFiles(files) {
+  if (!draftImgs || readOnly || !files.length) return;
+  // D6: the first image on a team board, once per device
+  if (IS_TEAM && !state.imageNoticeSeen) { noticeFiles = { gen: draftImgs.gen, files }; renderImages(); return; }
+  requestPersist();
+  const job = draftImgs;
+  for (const file of files) {
+    const ph = { id: C.uid(), preparing: true, name: String(file.name || '').slice(0, 120), at: Date.now() };
+    job.adds.push(ph);
+    if (draftImgs === job) renderImages();
+    let prep = null, blobId = null;
+    try {
+      prep = await prepareImage(file);
+      blobId = await storeImage(prep);
+    } catch (err) {
+      job.adds.splice(job.adds.indexOf(ph), 1);
+      if (draftImgs === job) renderImages();
+      const why = err && err.message;
+      toast(tr(why === 'large' ? 'imageTooLarge' : why === 'type' ? 'imageNotSupported' : 'imageUnreadable'));
+      continue;
+    }
+    Object.assign(ph, { preparing: false, blob: blobId, type: prep.type, w: prep.w, h: prep.h, bytes: prep.bytes });
+    if (draftImgs === job) { renderImages(); continue; }
+    // The editor closed while this was preparing: its outcome decides.
+    job.adds.splice(job.adds.indexOf(ph), 1);
+    const out = editorOutcome.get(job.gen);
+    if (out && out.saved && byId(out.saved)) {
+      state.attachments = { ...(state.attachments || {}), [ph.id]: attachmentEntry(ph, out.saved) };
+      save();
+      render();
+    } else {
+      dropIfUnreferenced([blobId]);
+    }
+  }
+}
+
+function draftImageList() {
+  if (!draftImgs) return [];
+  return C.liveAttachments(state, draftImgs.taskId).filter(a => !draftImgs.removes.has(a.id))
+    .concat(draftImgs.adds);
+}
+
+function removeImage(id) {
+  if (!draftImgs) return;
+  const d = draftImgs;
+  const i = d.adds.findIndex(a => a.id === id);
+  let held = null;
+  if (i >= 0) { held = d.adds.splice(i, 1)[0]; d.dropped.push(held); }
+  else d.removes.add(id);
+  renderImages();
+  toast(tr('imageRemoved'), () => {
+    if (draftImgs === d) {
+      if (held) { d.dropped.splice(d.dropped.indexOf(held), 1); d.adds.splice(Math.min(i, d.adds.length), 0, held); }
+      else d.removes.delete(id);
+      renderImages();
+      return;
+    }
+    // the editor has saved since: undo on the board itself
+    const saved = state.attachments && state.attachments[id];
+    if (saved && saved.gone) {
+      state.attachments = { ...state.attachments, [id]: { ...saved } };
+      delete state.attachments[id].gone;
+      save();
+      render();
+    } else if (held && d.saved && byId(d.saved)) {
+      state.attachments = { ...(state.attachments || {}), [id]: attachmentEntry(held, d.saved) };
+      save();
+      render();
+    }
+  });
+}
+
+/* ── the strip (B1) ── */
+
+const fImages = $('#f-images');
+const fImagesNote = $('#f-images-note');
+const fImageFile = $('#f-image-file');
+
+const kb = n => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+
+function renderImages() {
+  if (!fImages) return;
+  fImages.innerHTML = '';
+  if (!draftImgs) return;
+  if (noticeFiles && noticeFiles.gen !== draftImgs.gen) noticeFiles = null;
+  if (noticeFiles) {
+    const note = document.createElement('div');
+    note.className = 'img-notice';
+    note.innerHTML = `<p>${esc(tr('teamImageNotice'))}</p>
+      <div class="img-notice-row"><button class="primary sm" data-a="ok">${esc(tr('addImage'))}</button><button class="ghost sm" data-a="no">${esc(tr('cancel'))}</button></div>`;
+    note.querySelector('[data-a="ok"]').onclick = () => {
+      state.imageNoticeSeen = true; // a device preference: never travels
+      save();
+      const files = noticeFiles.files;
+      noticeFiles = null;
+      addImageFiles(files);
+    };
+    note.querySelector('[data-a="no"]').onclick = () => { noticeFiles = null; renderImages(); };
+    fImages.append(note);
+    fImagesNote.textContent = '';
+    return;
+  }
+  const list = draftImageList();
+  list.forEach((a, i) => {
+    const tile = document.createElement('button');
+    tile.type = 'button';
+    tile.className = 'img-tile';
+    tile.dataset.id = a.id;
+    const who = IS_TEAM && a.by ? memberOf(a.by) : null;
+    if (a.preparing) {
+      tile.classList.add('preparing');
+      tile.innerHTML = `<span class="img-state">${esc(tr('preparing'))}</span>`;
+    } else {
+      tile.innerHTML = `<span class="img-state"></span>${who ? avatarHtml(who, 'xs') : ''}`;
+      tile.title = a.name || '';
+      imageUrl(a).then(r => {
+        if (!tile.isConnected) return;
+        if (r.url) {
+          const img = document.createElement('img');
+          img.alt = a.name || '';
+          img.src = r.url;
+          tile.prepend(img);
+          tile.classList.add('ready');
+        } else {
+          tile.classList.add(r.state);
+          $('.img-state', tile).textContent = tr(r.state === 'arriving' ? 'arriving' : 'notOnDevice');
+        }
+      });
+      tile.onclick = () => openLightbox(i);
+    }
+    fImages.append(tile);
+  });
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'img-add';
+  add.title = tr('addImage');
+  add.innerHTML = `${ICON.plus}<span>${esc(tr('addPhoto'))}</span>`;
+  add.onclick = () => fImageFile.click();
+  fImages.append(add);
+  renderImagesNote(list);
+}
+
+/** The line under the strip: a hint, or what the images are doing. */
+async function renderImagesNote(list) {
+  const d = draftImgs;
+  const ready = list.filter(a => !a.preparing && a.blob);
+  let text = tr('imagesHint');
+  let cls = '';
+  if (ready.some(a => imgFail.get(a.blob) === 'full') && boardFull) {
+    text = `${tr('boardFull')} · ${kb(boardFull.used)} / ${kb(boardFull.quota)}`;
+    cls = 'bad';
+  } else if (ready.length) {
+    const recs = await Promise.all(ready.map(a => imgGet(a.blob).catch(() => null)));
+    if (draftImgs !== d) return;
+    const fp = sync && blobKeys && blobKeys.secret === sync.secret ? blobKeys.fp : null;
+    const unsent = recs.filter(r => r && !(r.sentTo || []).length && !(fp && (r.sentTo || []).includes(fp)));
+    const arriving = ready.filter((a, i) => !recs[i]);
+    if (unsent.length && !sync) { text = tr('onlyHere'); cls = 'warn'; }
+    else if (unsent.length && syncStatus === 'offline') { text = tr('uploadWaiting'); cls = 'warn'; }
+    else if (unsent.length || uploadingNow) { text = tr('uploadingN').replace('{n}', Math.max(1, unsent.length)); cls = 'busy'; }
+    else if (arriving.length && sync) { text = tr('arrivingN').replace('{n}', arriving.length); cls = 'busy'; }
+  }
+  if (draftImgs !== d) return;
+  fImagesNote.textContent = text;
+  fImagesNote.className = `img-note ${cls}`;
+}
+
+function refreshImageViews() {
+  if (draftImgs && !editor.hidden) renderImages();
+}
+
+if (fImageFile) {
+  fImageFile.addEventListener('change', () => {
+    const files = [...fImageFile.files];
+    fImageFile.value = '';
+    addImageFiles(files);
+  });
+}
+
+// Drop anywhere on the sheet.
+const hasFiles = e => [...((e.dataTransfer && e.dataTransfer.types) || [])].includes('Files');
+editor.addEventListener('dragover', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  editor.classList.add('dropping');
+});
+editor.addEventListener('dragleave', e => {
+  if (!editor.contains(e.relatedTarget)) editor.classList.remove('dropping');
+});
+editor.addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  editor.classList.remove('dropping');
+  addImageFiles([...e.dataTransfer.files].filter(f => /^image\//.test(f.type)));
+});
+
+/* ── the lightbox (C1) ── */
+
+let lightboxEl = null, lightboxAt = 0;
+
+function openLightbox(i) {
+  closeLightbox();
+  lightboxAt = i;
+  lightboxEl = document.createElement('div');
+  lightboxEl.className = 'lightbox';
+  lightboxEl.setAttribute('role', 'dialog');
+  lightboxEl.setAttribute('aria-modal', 'true');
+  document.body.append(lightboxEl);
+  renderLightbox();
+}
+
+function closeLightbox() {
+  if (!lightboxEl) return;
+  lightboxEl.remove();
+  lightboxEl = null;
+}
+
+function stepLightbox(dir) {
+  const list = draftImageList().filter(a => !a.preparing);
+  if (!list.length) { closeLightbox(); return; }
+  lightboxAt = (lightboxAt + dir + list.length) % list.length;
+  renderLightbox();
+}
+
+function renderLightbox() {
+  if (!lightboxEl) return;
+  const list = draftImageList().filter(a => !a.preparing);
+  if (!list.length) { closeLightbox(); return; }
+  lightboxAt = Math.min(lightboxAt, list.length - 1);
+  const a = list[lightboxAt];
+  const who = IS_TEAM && a.by ? (memberOf(a.by) || { name: a.byName || '?' }) : null;
+  lightboxEl.innerHTML = `
+    <header class="lb-head">
+      <div class="lb-file"><span class="lb-name">${esc(a.name || tr('image'))}</span><span class="lb-facts">${kb(a.bytes || 0)} · ${a.w}×${a.h}</span></div>
+      <span class="lb-count">${lightboxAt + 1} / ${list.length}</span>
+      <div class="lb-actions">
+        ${who ? `<span class="lb-who">${avatarHtml(who, 'xs')}${esc(who.name)} · ${esc(age(a.at) || tr('today'))}</span>` : ''}
+        <button class="lb-btn" data-a="dl" title="${esc(tr('downloadImage'))}">${ICON.download}</button>
+        <button class="lb-btn" data-a="rm" title="${esc(tr('delete'))}">${ICON.trash}</button>
+        <button class="lb-btn" data-a="x" title="${esc(tr('close'))}">${ICON.close}</button>
+      </div>
+    </header>
+    <div class="lb-stage">
+      ${list.length > 1 ? `<button class="lb-nav prev" data-a="prev" title="←">${ICON.prev}</button>` : ''}
+      <div class="lb-img"><span class="img-state"></span></div>
+      ${list.length > 1 ? `<button class="lb-nav next" data-a="next" title="→">${ICON.next}</button>` : ''}
+    </div>
+    ${list.length > 1 ? `<div class="lb-thumbs">${list.map((x, j) => `<button class="lb-thumb${j === lightboxAt ? ' on' : ''}" data-j="${j}"></button>`).join('')}</div>` : ''}`;
+  const box = $('.lb-img', lightboxEl);
+  imageUrl(a).then(r => {
+    if (!lightboxEl || !box.isConnected) return;
+    if (r.url) { const img = document.createElement('img'); img.src = r.url; img.alt = a.name || ''; box.replaceChildren(img); }
+    else $('.img-state', box).textContent = tr(r.state === 'arriving' ? 'arriving' : 'notOnDevice');
+  });
+  lightboxEl.querySelectorAll('.lb-thumb').forEach(t => {
+    const x = list[+t.dataset.j];
+    imageUrl(x).then(r => { if (r.url && t.isConnected) t.style.backgroundImage = `url(${r.url})`; });
+    t.onclick = () => { lightboxAt = +t.dataset.j; renderLightbox(); };
+  });
+  lightboxEl.onclick = e => {
+    const act = e.target.closest('[data-a]');
+    if (!act) { if (e.target === lightboxEl || e.target.classList.contains('lb-stage')) closeLightbox(); return; }
+    const k = act.dataset.a;
+    if (k === 'x') closeLightbox();
+    if (k === 'prev') stepLightbox(-1);
+    if (k === 'next') stepLightbox(1);
+    if (k === 'rm') { removeImage(a.id); renderLightbox(); }
+    if (k === 'dl') imageUrl(a).then(r => {
+      if (!r.url) return;
+      const link = document.createElement('a');
+      link.href = r.url;
+      link.download = a.name || `image.${(a.type || 'image/webp').split('/')[1]}`;
+      link.click();
+    });
+  };
+}
+
+/* ── backups carry the bytes ── */
+
+/** Every live image's bytes as base64url; a synced board fetches what it
+    lacks first. Returns { images, missing }. */
+async function backupImages() {
+  const images = {}, missing = [];
+  for (const a of C.liveAttachments(state)) {
+    if (images[a.blob]) continue;
+    let rec = await imgGet(a.blob).catch(() => null);
+    if (!rec) { imgTried.delete(a.blob); await imageUrl(a); rec = await imgGet(a.blob).catch(() => null); }
+    if (!rec) { missing.push(a.blob); continue; }
+    images[a.blob] = C.bytesToB64u(new Uint8Array(await rec.bytes.arrayBuffer()));
+  }
+  return { images, missing };
+}
+
+/** A backup's images → local records. Only ids the file's own references
+    name, only real images within the limit, never over a different record. */
+async function restoreImages(file) {
+  const images = file.images;
+  if (!images || typeof images !== 'object') return 0;
+  const wanted = new Set(Object.values(file.attachments || {}).map(a => a && a.blob).filter(Boolean));
+  let n = 0;
+  for (const [blobId, b64] of Object.entries(images)) {
+    if (!C.BLOB_ID.test(blobId) || !wanted.has(blobId) || typeof b64 !== 'string') continue;
+    try {
+      const bytes = C.b64uToBytes(b64);
+      const info = C.imageInfo(bytes);
+      if (!info || bytes.length > C.MAX_IMAGE) continue;
+      const sha = await sha256Hex(bytes);
+      const held = await imgGet(blobId).catch(() => null);
+      if (held && held.sha !== sha) continue;
+      if (!held) await imgPut({ blobId, ns: IMG_NS, type: info.type, bytes: new Blob([bytes], { type: info.type }), sha, sentTo: [], used: Date.now() });
+      n++;
+    } catch (err) { /* skip that one */ }
+  }
+  return n;
 }
 
 /* ── go ────────────────────────────────────────────────── */

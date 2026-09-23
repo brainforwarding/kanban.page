@@ -16,10 +16,12 @@ and reviewed there; the rules an agent can break are under "Team boards" below.
 ## Commands
 
 ```bash
-npm test                                                    # core + team + CLI, no deps
+npm test                                                    # core + team + images + relay + CLI, no deps
 node --test tests/core.test.js                              # unit tests, no deps
 node --test tests/team.test.js                              # team boards + computers rules
 node --test tests/cli.test.js                               # CLI, against a fake relay
+node --test tests/attachments.test.js                       # images: merge, v4, crypto
+node --test tests/relay.test.js                             # relay image routes
 node --test --test-name-pattern="markdown" tests/core.test.js   # one test by name
 ```
 
@@ -40,7 +42,9 @@ Per-test failures live in `window.__results` on that page. Keep the README's tes
 people, an in-memory relay the app finds through `window.parent.__kanbanTestRelay`
 (the `testRelay` seam in `app.js`, inert unless framed by that harness), and
 scratch namespaces pinned with `?home=` so nothing touches the real personal
-board. Run each suite in a **fresh Chrome profile**: a service worker
+board. Each simulated person also gets their own image database through
+`window.parent.__kanbanTestDevice` (same seam, same inertness), or the second
+"device" would read the first one's image bytes locally. Run each suite in a **fresh Chrome profile**: a service worker
 registered by one run serves the app shell in place of the next test page.
 
 ## Architecture
@@ -138,6 +142,30 @@ older clients' `aggregateWeek` would read an `assign` event as a move.
 **Leaving is a tombstone** (`teamsLeft`), stamped past the join it ends; only
 an entry absent from the last save and present now starts a new `joinMt`.
 Export omits `teams`; imports and Undo keep the current ones (`keepMembership`).
+
+### Images: the rules that keep bytes out of the board
+
+`docs/attachments.md` is the design record. A board carries `attachments`
+references only; the bytes live in IndexedDB (`kanban.images`) and, sealed
+with the `kanban.page blob` HKDF key and AAD-bound to their id, beside the
+board on the relay (`/v1/blob/<id>`). These break silently if changed:
+
+- **A board push never carries, waits on or retries an image.** Uploads run in
+  their own session-bound queue (`uploadImages`) with their own retry.
+- **Any attachment makes the board v4** (`hasV4Data`); a v3 client would strip
+  the map. **Absence is never removal** — only `gone` removes; `stampChanges`
+  puts a missing entry back, snapshots keep the current map (`keepMembership`),
+  and the floor unions it. **Liveness is derived** (`liveAttachments`): not
+  `gone` and the card exists — deleting a card writes nothing to its images.
+- **Editor image jobs belong to one opening** (`editorGen`, `editorOutcome`);
+  a new card's id is minted when the editor opens. A reference is added only
+  after its bytes are committed locally; only a discarded draft's unsent bytes
+  are ever deleted by the client.
+- **Replace installs the linked board's map**, never the old one's.
+- **Every image is re-encoded** through a canvas (no EXIF/GPS leaves), after
+  `imageInfo` checks type and pixel count from the header.
+- **The relay budget for image bytes fails closed**; 507 is permanent for a
+  board (nothing but ending sync frees space).
 
 ### Rendering model and its one big gotcha
 

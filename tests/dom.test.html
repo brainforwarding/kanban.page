@@ -1133,6 +1133,126 @@ frame.addEventListener('load', async function run() {
     eq(W.localStorage.getItem('board.sync.test'), null, 'no sync config was created');
   });
 
+  /* ── images (docs/attachments.md) ──────────────────── */
+
+  // A real PNG, made the way a screenshot arrives: from a canvas.
+  async function pngFile(color = '#FFB454', name = 'shot.png') {
+    const c = W.document.createElement('canvas');
+    c.width = 120; c.height = 80;
+    const g = c.getContext('2d'); g.fillStyle = color; g.fillRect(0, 0, 120, 80);
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    return new W.File([blob], name, { type: 'image/png' });
+  }
+  async function pasteImage(file) {
+    const dt = new W.DataTransfer();
+    dt.items.add(file);
+    D.dispatchEvent(new W.ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }
+  async function until(cond, ms = 4000, msg = 'timed out') {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { if (await cond()) return; await sleep(40); }
+    throw new Error(msg);
+  }
+  const liveImages = () => Object.values(W.__board.state.attachments || {}).filter(a => !a.gone);
+  const idbHas = blobId => new Promise(res => {
+    const r = W.indexedDB.open('kanban.images', 2);
+    r.onsuccess = () => {
+      const q = r.result.transaction('blobs').objectStore('blobs').get(['test', blobId]);
+      q.onsuccess = () => { res(!!q.result); r.result.close(); };
+      q.onerror = () => { res(false); r.result.close(); };
+    };
+    r.onerror = () => res(false);
+  });
+
+  await test('pasting an image into the editor attaches it on save and the card counts it', async () => {
+    await reset();
+    W.openEditor(null);
+    D.getElementById('f-title').value = 'checkout overlaps footer';
+    await pasteImage(await pngFile());
+    await until(() => D.querySelector('#f-images .img-tile.ready'), 4000, 'the tile never showed the image');
+    W.saveEditor();
+    await sleep(250);
+    eq(liveImages().length, 1, 'one attachment on the board');
+    const a = liveImages()[0];
+    eq(a.task, W.__board.state.tasks.find(t => t.title === 'checkout overlaps footer').id, 'bound to the card');
+    assert(['image/png', 'image/webp'].includes(a.type), 're-encoded to a stored type');
+    const count = D.querySelector('.card .imgcount');
+    assert(count && count.textContent.trim() === '1', 'the card shows 1 image');
+    assert(await idbHas(a.blob), 'the bytes are on this device');
+    const stored = JSON.parse(W.localStorage.getItem('board.v2.test'));
+    assert(!JSON.stringify(stored).includes('data:image') && JSON.stringify(stored.attachments).length < 400, 'the board holds a reference, not bytes');
+  });
+
+  await test('Esc discards a pasted image and frees its bytes', async () => {
+    await reset();
+    W.openEditor(null);
+    D.getElementById('f-title').value = 'never saved';
+    await pasteImage(await pngFile('#6BCB77', 'green.png'));
+    await until(() => D.querySelector('#f-images .img-tile.ready'));
+    const blob = [...(W.draftImageList ? W.draftImageList() : [])].map(a => a.blob)[0];
+    assert(blob, 'the draft holds the image');
+    D.dispatchEvent(new W.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await sleep(300);
+    eq(liveImages().length, 0, 'nothing reached the board');
+    assert(!W.__board.state.tasks.some(t => t.title === 'never saved'), 'no card either');
+    eq(await idbHas(blob), false, 'the unreferenced bytes were deleted');
+  });
+
+  await test('removing an image from the lightbox is undoable after the editor saved', async () => {
+    await reset();
+    W.openEditor(null);
+    D.getElementById('f-title').value = 'with a picture';
+    await pasteImage(await pngFile('#8FE3FF', 'blue.png'));
+    await until(() => D.querySelector('#f-images .img-tile.ready'));
+    W.saveEditor();
+    await sleep(250);
+    W.openEditor(W.__board.state.tasks.find(t => t.title === 'with a picture').id);
+    await until(() => D.querySelector('#f-images .img-tile.ready'));
+    D.querySelector('#f-images .img-tile').click();
+    await until(() => D.querySelector('.lightbox [data-a="rm"]'));
+    D.querySelector('.lightbox [data-a="rm"]').click();
+    W.saveEditor();
+    await sleep(250);
+    eq(liveImages().length, 0, 'removed on save');
+    assert(Object.values(W.__board.state.attachments)[0].gone, 'a tombstone, not an absence');
+    assert(!D.querySelector('.card .imgcount'), 'the card no longer counts it');
+    D.getElementById('toast-undo').click();
+    await sleep(250);
+    eq(liveImages().length, 1, 'Undo brought it back');
+    assert(D.querySelector('.card .imgcount'), 'and the card counts it again');
+  });
+
+  await test('an image added and removed before the first save leaves no bytes behind', async () => {
+    await reset();
+    W.openEditor(null);
+    D.getElementById('f-title').value = 'changed my mind';
+    await pasteImage(await pngFile('#FFE27A', 'yellow.png'));
+    await until(() => D.querySelector('#f-images .img-tile.ready'));
+    const blob = W.draftImageList()[0].blob;
+    W.removeImage(W.draftImageList()[0].id);
+    W.saveEditor();
+    await sleep(250);
+    eq(liveImages().length, 0, 'nothing attached');
+    assert(await idbHas(blob), 'kept while its Undo is on screen');
+    await sleep(9500);
+    eq(await idbHas(blob), false, 'freed once the Undo window closed');
+  });
+
+  await test('an image on an unsynced board survives a reload', async () => {
+    await reset();
+    W.openEditor(null);
+    D.getElementById('f-title').value = 'kept here';
+    await pasteImage(await pngFile('#C9B6FF', 'violet.png'));
+    await until(() => D.querySelector('#f-images .img-tile.ready'));
+    W.saveEditor();
+    await sleep(250);
+    await reload();
+    W.openEditor(W.__board.state.tasks.find(t => t.title === 'kept here').id);
+    await until(() => D.querySelector('#f-images .img-tile.ready img'), 4000, 'the image did not come back from the device store');
+    assert(/only on this device/.test(D.getElementById('f-images-note').textContent), 'says it is only here');
+    W.closeEditor();
+  });
+
   /* ── done ───────────────────────────────────────────── */
 
   W.localStorage.removeItem('board.v2.test');

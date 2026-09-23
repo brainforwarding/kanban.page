@@ -178,6 +178,8 @@ invariants it holds to.
 ```bash
 node --test tests/core.test.js     # 114 unit tests, no dependencies
 node --test tests/team.test.js     # 32 team-board and computer rules
+node --test tests/attachments.test.js  # 15 image rules: merge, v4, crypto, headers
+node --test tests/relay.test.js    # 11 relay image routes, against in-memory storage
 node --test tests/cli.test.js      # 31 CLI tests, against a fake relay
 ```
 
@@ -188,9 +190,9 @@ and three replicas converging. The CLI suite covers the ways a headless
 writer could lose work: a lost response double-adding a card, a retry
 restamping clocks, a concurrent delete losing to a stale edit, and a
 future schema being written back as an old one. Then open `tests/dom.test.html` in Chrome for
-50 interaction tests — they drive the real app in an iframe and report
+55 interaction tests — they drive the real app in an iframe and report
 pass/fail in the page title, against a `?ns=test` board that never touches
-your data — and `tests/team.dom.test.html` for 19 end-to-end team and computer
+your data — and `tests/team.dom.test.html` for 22 end-to-end team and computer
 flows (two people, one in-memory relay, scratch namespaces only).
 
 ```

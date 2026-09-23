@@ -36,3 +36,10 @@ simple = { limit = 12, period = 60 }
 name = "WATCH"
 namespace_id = "1002"
 simple = { limit = 60, period = 60 }
+
+# Image routes (docs/attachments.md): requests per IP. Bytes are budgeted
+# separately by the Gate, which fails closed.
+[[ratelimits]]
+name = "BLOB"
+namespace_id = "1003"
+simple = { limit = 120, period = 60 }

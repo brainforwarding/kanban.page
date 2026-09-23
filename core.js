@@ -492,6 +492,7 @@ const BoardCore = (() => {
     for (const x of st.teams || []) m = Math.max(m, x.joinMt || 0, x.mt || 0, x.memberMt || 0);
     for (const ts of Object.values(st.teamsLeft || {})) m = Math.max(m, ts || 0);
     for (const x of Object.values(st.privateSessions || {})) m = Math.max(m, (x && x.mt) || 0);
+    for (const x of Object.values(st.attachments || {})) m = Math.max(m, (x && x.mt) || 0);
     if (st.profile) m = Math.max(m, st.profile.mt || 0);
     return Math.max(m, st.columnsMt || 0, st.projectsMt || 0, st.machinesMt || 0);
   }
@@ -628,6 +629,19 @@ const BoardCore = (() => {
       if (!before || canon(itemContent(before)) !== canon(itemContent(v))) { v.mt = clock; stamped = true; }
     }
 
+    // Images, per attachment id (docs/attachments.md). Absence is never a
+    // removal — only `gone` removes — so an entry missing since the last save
+    // is put back exactly as it was. A snapshot that predates a teammate's
+    // image must not be able to delete it.
+    const oldAtt = prev.attachments || {};
+    for (const [k, before] of Object.entries(oldAtt)) {
+      if (!next.attachments || !next.attachments[k]) (next.attachments = next.attachments || {})[k] = before;
+    }
+    for (const [k, v] of Object.entries(next.attachments || {})) {
+      const before = oldAtt[k];
+      if (!before || canon(itemContent(before)) !== canon(itemContent(v))) { v.mt = clock; stamped = true; }
+    }
+
     if (stamped) delete next.seed;
     return next;
   }
@@ -646,6 +660,9 @@ const BoardCore = (() => {
   /** Team and computer data an older client would silently drop (its
       whitelist) or corrupt (its fieldMt rebuild). Any of it makes a board v3,
       which every older client refuses instead. docs/team.md → Schema. */
+  /** Images: a v3 client accepts v3 and its syncable drops unknown keys, so a
+      board with images is v4, which every older client refuses. */
+  const hasV4Data = st => !!(st.attachments && Object.keys(st.attachments).length);
   const hasV3Data = st => !!((st.members && st.members.length) || (st.teams && st.teams.length)
     || (st.teamsLeft && Object.keys(st.teamsLeft).length)
     || (st.machines && st.machines.length)
@@ -654,7 +671,7 @@ const BoardCore = (() => {
     || (st.tasks || []).some(t => t.assigneeId || t.assignedBy || t.sessionMachine || t.sessionCwd));
   const syncable = st => {
     const out = {
-      v: hasV3Data(st) ? 3 : 2,
+      v: hasV4Data(st) ? 4 : hasV3Data(st) ? 3 : 2,
       columns: st.columns,
       columnsMt: st.columnsMt || 0,
       projects: st.projects,
@@ -671,6 +688,7 @@ const BoardCore = (() => {
     if (st.machines && st.machines.length) { out.machines = st.machines; out.machinesMt = st.machinesMt || 0; }
     if (st.privateSessions && Object.keys(st.privateSessions).length) out.privateSessions = byKey(st.privateSessions);
     if (st.profile && (st.profile.name || st.profile.avatar)) out.profile = st.profile;
+    if (st.attachments && Object.keys(st.attachments).length) out.attachments = byKey(st.attachments);
     return out;
   };
 
@@ -686,7 +704,7 @@ const BoardCore = (() => {
    *
    * Returns null when acceptable, else a short reason string.
    */
-  const SYNC_V = 3;
+  const SYNC_V = 4;
   const isStr = v => typeof v === 'string' && v.length > 0;
   const isNum = v => typeof v === 'number' && isFinite(v);
   const ICONS = ['laptop', 'desktop', 'mini', 'server'];
@@ -697,6 +715,19 @@ const BoardCore = (() => {
    * data never mix: a roster on the personal board, or a team list or private
    * sessions on a team board, is refused before adoption, merge or push.
    */
+  const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+  const MAX_IMAGE = 1_000_000;
+  const isCount = v => typeof v === 'number' && isFinite(v) && v >= 0;
+  function attachmentProblem(a) {
+    if (!a || typeof a !== 'object' || Array.isArray(a)) return 'an attachment is malformed';
+    if (!isStr(a.task) || !BLOB_ID.test(a.blob || '')) return 'an attachment has no card or image';
+    if (!IMAGE_TYPES.includes(a.type)) return 'an attachment type is not an image';
+    if (!isCount(a.w) || !isCount(a.h) || !isCount(a.bytes) || a.bytes > MAX_IMAGE) return 'an attachment size is malformed';
+    if (a.name !== undefined && typeof a.name !== 'string') return 'an attachment name is not a string';
+    if (a.mt !== undefined && !isNum(a.mt)) return 'an attachment clock is not a number';
+    return null;
+  }
+
   function validateSyncable(x, kind) {
     if (!x || typeof x !== 'object' || Array.isArray(x)) return 'not an object';
     if ((x.v || SYNC_V) > SYNC_V) return `schema v${x.v} is newer than this client (v${SYNC_V})`;
@@ -750,6 +781,13 @@ const BoardCore = (() => {
     if (x.profile !== undefined) {
       if (!isMap(x.profile) || typeof (x.profile.name || '') !== 'string'
         || (x.profile.avatar != null && typeof x.profile.avatar !== 'string')) return 'the profile is malformed';
+    }
+    if (x.attachments !== undefined) {
+      if (!isMap(x.attachments)) return 'attachments is not an object';
+      for (const a of Object.values(x.attachments)) {
+        const bad = attachmentProblem(a);
+        if (bad) return bad;
+      }
     }
     if (kind === 'personal' && x.members !== undefined) return 'a roster cannot land on the personal board';
     if (kind === 'team') {
@@ -1061,6 +1099,18 @@ const BoardCore = (() => {
       if (liveMachines && !liveMachines.has(v.sessionMachine)) delete v.sessionMachine; // never a wrong computer
     }
 
+    // Images: a set keyed by attachment id, higher mt wins, ties canonical.
+    // Removal is a `gone` entry, never an absence, so nothing here deletes.
+    const attachments = {};
+    for (const side of [a.attachments, b.attachments]) {
+      for (const [k, v] of Object.entries(side || {})) {
+        const held = attachments[k];
+        if (!held || (v.mt || 0) > (held.mt || 0) || ((v.mt || 0) === (held.mt || 0) && canon(v) > canon(held))) {
+          attachments[k] = deep(v);
+        }
+      }
+    }
+
     // The log only ever grows. A same-id collision is a rewriteDay conflict:
     // the stamped rewrite wins, a tie goes to the greater serialization.
     const events = new Map();
@@ -1096,6 +1146,7 @@ const BoardCore = (() => {
       : canon(pa) >= canon(pb) ? pa : pb;
     setOrDrop('profile', profile ? deep(profile) : null, !profile);
     setOrDrop('privateSessions', Object.fromEntries(Object.entries(privateSessions).sort(([p], [q]) => p < q ? -1 : 1)), !Object.keys(privateSessions).length);
+    setOrDrop('attachments', Object.fromEntries(Object.entries(attachments).sort(([p], [q]) => p < q ? -1 : 1)), !Object.keys(attachments).length);
     if (machs) { out.machines = deep(machs.items); out.machinesMt = machs.orderMt; }
     delete out.seed; // a merged board is never a replaceable first-run seed
     return out;
@@ -1136,8 +1187,17 @@ const BoardCore = (() => {
       tombstones[id] = Math.max(tombstones[id] || 0, ts);
     }
 
+    // Image references known to be on the relay: per key, merge's rule.
+    const attachments = { ...(st.attachments || {}) };
+    for (const [k, v] of Object.entries((floor && floor.attachments) || {})) {
+      const held = attachments[k];
+      if (!held || (v.mt || 0) > (held.mt || 0) || ((v.mt || 0) === (held.mt || 0) && canon(v) > canon(held))) attachments[k] = v;
+    }
+
     return {
       ...st,
+      ...(Object.keys(attachments).length
+        ? { attachments: Object.fromEntries(Object.entries(attachments).sort(([x], [y]) => x < y ? -1 : 1)) } : {}),
       // A tombstone removes an observed existence generation. Only an explicit
       // restore/new generation can outvote it; an unseen stale edit cannot.
       tasks: (st.tasks || []).filter(t => !(tombstones[t.id] != null && existMtOf(t) <= tombstones[t.id])),
@@ -1229,6 +1289,94 @@ const BoardCore = (() => {
       key, b64uToBytes(env.d)));
     const data = env.gz ? await pipeBytes(pt, new DecompressionStream('gzip')) : pt;
     return JSON.parse(new TextDecoder().decode(data));
+  }
+
+  /* Images (docs/attachments.md). A separate HKDF label, so the image key
+     never shares an IV space with the board's `enc` key. */
+  async function deriveBlobKey(secret) {
+    const km = await crypto.subtle.importKey('raw', b64uToBytes(secret), 'HKDF', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: HKDF_SALT, info: new TextEncoder().encode('kanban.page blob') },
+      km, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  const BLOB_ID = /^[A-Za-z0-9_-]{22}$/;
+  const newBlobId = () => bytesToB64u(crypto.getRandomValues(new Uint8Array(16)));
+  // The id is authenticated, so the relay cannot answer one image's request
+  // with another image's bytes.
+  const blobAad = id => new TextEncoder().encode(`kanban.page:blob:v1:${id}`);
+
+  /** Image bytes → iv ‖ ciphertext. */
+  async function sealBlob(key, id, bytes) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = new Uint8Array(await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: blobAad(id) }, key, bytes));
+    const out = new Uint8Array(12 + ct.length);
+    out.set(iv, 0);
+    out.set(ct, 12);
+    return out;
+  }
+
+  /** iv ‖ ciphertext → image bytes. Throws on tampering, a wrong key or a wrong id. */
+  async function unsealBlob(key, id, sealed) {
+    const buf = sealed instanceof Uint8Array ? sealed : new Uint8Array(sealed);
+    if (buf.length < 12 + 16) throw new Error('blob too short');
+    return new Uint8Array(await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: buf.subarray(0, 12), additionalData: blobAad(id) }, key, buf.subarray(12)));
+  }
+
+  /** A card's images that are live here: not removed, and the card itself
+      exists on this board. Liveness is derived, so deleting a card forever
+      writes nothing to its images and Undo brings them back with it. */
+  function liveAttachments(st, taskId) {
+    const cards = new Set((st.tasks || []).map(t => t.id));
+    return Object.entries(st.attachments || {})
+      .filter(([, a]) => a && !a.gone && cards.has(a.task) && (taskId == null || a.task === taskId))
+      .map(([id, a]) => ({ id, ...a }))
+      .sort((x, y) => (x.at || 0) - (y.at || 0) || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  }
+
+  /** Type and dimensions from an image's header, before anything decodes it
+      — so a tiny file declaring a gigantic canvas is refused, not allocated.
+      Returns { type, w, h } or null for anything that is not one of the four. */
+  function imageInfo(b) {
+    if (!b || b.length < 12) return null;
+    const u32 = i => ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
+    const u16 = i => (b[i] << 8) | b[i + 1];
+    const le16 = i => b[i] | (b[i + 1] << 8);
+    const le24 = i => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16);
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) {
+      return b.length >= 24 ? { type: 'image/png', w: u32(16), h: u32(20) } : null;
+    }
+    if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) {
+      return { type: 'image/gif', w: le16(6), h: le16(8) };
+    }
+    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46
+      && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
+      if (b.length < 30) return null;
+      const chunk = String.fromCharCode(b[12], b[13], b[14], b[15]);
+      if (chunk === 'VP8X') return { type: 'image/webp', w: le24(24) + 1, h: le24(27) + 1 };
+      if (chunk === 'VP8 ') return { type: 'image/webp', w: le16(26) & 0x3FFF, h: le16(28) & 0x3FFF };
+      if (chunk === 'VP8L') {
+        const bits = b[21] | (b[22] << 8) | (b[23] << 16) | (b[24] << 24);
+        return { type: 'image/webp', w: (bits & 0x3FFF) + 1, h: ((bits >>> 14) & 0x3FFF) + 1 };
+      }
+      return null;
+    }
+    if (b[0] === 0xFF && b[1] === 0xD8) {
+      // walk the markers to the first start-of-frame
+      let i = 2;
+      while (i + 9 < b.length) {
+        if (b[i] !== 0xFF) { i++; continue; }
+        const m = b[i + 1];
+        if (m === 0xD8 || m === 0x01 || (m >= 0xD0 && m <= 0xD7) || m === 0xFF) { i += m === 0xFF ? 1 : 2; continue; }
+        if ((m >= 0xC0 && m <= 0xCF) && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
+          return { type: 'image/jpeg', w: u16(i + 7), h: u16(i + 5) };
+        }
+        i += 2 + u16(i + 2);
+      }
+      return null;
+    }
+    return null;
   }
 
   /* ── storage ─────────────────────────────────────────── */
@@ -1352,6 +1500,8 @@ const BoardCore = (() => {
     reindex, applyOrder, sortByProject, defaultBoard, migrate,
     mtOf, pmtOf, existMtOf, clockMax, canon, stampChanges, syncable, validateSyncable, SYNC_V, merge, unionFloor,
     randomSecret, deriveSync, seal, unseal, bytesToB64u, b64uToBytes,
+    deriveBlobKey, sealBlob, unsealBlob, newBlobId, BLOB_ID, IMAGE_TYPES, MAX_IMAGE,
+    hasV4Data, liveAttachments, imageInfo,
     hasV3Data, teamIdOf, teamNs, isTeamNs, isFutureBoard, exportable, doneByOf, ICONS,
   };
 })();

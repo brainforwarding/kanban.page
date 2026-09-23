@@ -1655,6 +1655,102 @@ button[disabled] { opacity: .4; pointer-events: none; }
 .qr svg { display: block; width: 100%; height: auto; }
 .qr path { fill: #14131A; }
 
+/* images (docs/attachments.md) — A1 on the card, B1 in the editor, C1 the lightbox */
+.card .meta .imgcount { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.card .meta .imgcount svg { width: 12px; height: 12px; }
+.av.xs { width: 15px; height: 15px; font-size: 6.5px; box-shadow: none; }
+.av.xs.pix svg { width: 15px; height: 15px; }
+
+.img-wrap { flex: 1; min-width: 0; }
+.img-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+.img-tile, .img-add {
+  position: relative;
+  width: 72px; height: 72px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex: none;
+}
+.img-tile {
+  display: grid; place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--raise);
+  cursor: zoom-in;
+  transition: border-color .15s var(--ease), transform .15s var(--ease);
+}
+.img-tile:hover { border-color: var(--line-hi); }
+.img-tile:active { transform: scale(.97); }
+.img-tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.img-tile .img-state { font: 400 9.5px/1.2 var(--mono); color: var(--faint); text-align: center; padding: 0 6px; }
+.img-tile.ready .img-state { display: none; }
+.img-tile.preparing .img-state, .img-tile.arriving .img-state { color: var(--accent); }
+.img-tile.preparing { cursor: progress; border-style: dashed; border-color: var(--accent-dim); }
+.img-tile .av { position: absolute; right: 4px; bottom: 4px; box-shadow: 0 0 0 1.5px var(--surface); }
+.img-add {
+  display: grid; place-items: center;
+  border: 1.5px dashed var(--line-hi);
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+  transition: color .15s var(--ease), border-color .15s var(--ease);
+}
+.img-add:hover { color: var(--text); border-color: var(--muted); }
+.img-add svg { width: 16px; height: 16px; }
+.img-add span { display: none; }
+.img-note { margin-top: 7px; font: 400 10.5px/1.3 var(--mono); color: var(--faint); letter-spacing: .02em; }
+.img-note.busy, .img-note.warn { color: var(--accent); }
+.img-note.bad { color: var(--danger); }
+.img-notice {
+  flex: 1;
+  padding: 12px 14px;
+  border-radius: var(--r);
+  background: var(--accent-wash);
+  border: 1px solid var(--accent-dim);
+  font: 400 13px/1.45 var(--ui);
+  color: var(--text);
+}
+.img-notice p { margin: 0 0 10px; }
+.img-notice-row { display: flex; gap: 8px; }
+#editor.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+
+.lightbox {
+  position: fixed; inset: 0; z-index: 115; /* over the editor, under the toast its Undo lives in */
+  display: grid; grid-template-rows: auto 1fr auto;
+  background: rgba(10, 9, 14, .92);
+  color: #EFECF4;
+  animation: lb-in .18s var(--ease);
+}
+@keyframes lb-in { from { opacity: 0; } }
+.lb-head { display: flex; align-items: center; gap: 16px; padding: 14px 18px; }
+.lb-file { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.lb-name { font: 500 12.5px/1.2 var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lb-facts, .lb-count { font: 400 11px/1 var(--mono); color: #9A94A8; white-space: nowrap; }
+.lb-actions { flex: 1; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+.lb-who { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; font: 400 12.5px/1 var(--ui); color: #C9C4D4; white-space: nowrap; }
+.lb-btn, .lb-nav {
+  display: grid; place-items: center;
+  width: 32px; height: 32px; border-radius: 999px;
+  border: 0; background: rgba(255,255,255,.08); color: inherit; cursor: pointer;
+  transition: background .15s var(--ease);
+}
+.lb-btn:hover, .lb-nav:hover { background: rgba(255,255,255,.16); }
+.lb-btn svg, .lb-nav svg { width: 15px; height: 15px; }
+.lb-stage { position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 0 64px; }
+.lb-img { display: grid; place-items: center; max-width: 100%; max-height: 100%; height: 100%; }
+.lb-img img { max-width: 100%; max-height: calc(100vh - 150px); border-radius: 8px; box-shadow: 0 24px 60px -20px rgba(0,0,0,.8); }
+.lb-img .img-state { font: 400 12px var(--mono); color: #FFB454; }
+.lb-nav { position: absolute; top: 50%; width: 38px; height: 38px; margin-top: -19px; }
+.lb-nav.prev { left: 16px; }
+.lb-nav.next { right: 16px; }
+.lb-thumbs { display: flex; justify-content: center; gap: 8px; padding: 14px; }
+.lb-thumb {
+  width: 44px; height: 30px; border-radius: 4px; padding: 0;
+  border: 1.5px solid transparent; background: rgba(255,255,255,.08) center / cover no-repeat;
+  cursor: pointer; opacity: .6;
+}
+.lb-thumb.on { border-color: #FFB454; opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .lightbox { animation: none; } }
+
 /* ── input: no hover ───────────────────────────────────── */
 /* A finger never hovers, so every control a mouse reveals on :hover simply
    does not exist on a phone — and worse, opacity:0 still hit-tests, so they
@@ -1895,4 +1991,22 @@ button[disabled] { opacity: .4; pointer-events: none; }
     animation-iteration-count: 1 !important;
     transition-duration: .001ms !important;
   }
+}
+
+/* images on a phone (E): touch has no paste or drop, so the picker is the way in */
+@media (max-width: 640px) {
+  .img-strip { gap: 6px; }
+  .img-tile { width: 64px; height: 64px; }
+  .img-add { width: 100%; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .img-add span { display: inline; font: 500 13px var(--ui); }
+  .img-note { display: none; }
+  .img-note.busy, .img-note.warn, .img-note.bad { display: block; }
+  .lightbox { background: #0A090E; } /* full-screen on a phone (E3) */
+  .lb-head { flex-wrap: wrap; padding: 10px 12px; row-gap: 6px; }
+  .lb-file { order: 3; flex-basis: 100%; }
+  .lb-count { order: 1; }
+  .lb-actions { order: 2; }
+  .lb-stage { padding: 0 8px; }
+  .lb-nav { display: none; }
+  .lb-who { display: none; }
 }

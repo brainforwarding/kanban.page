@@ -11,6 +11,12 @@
    PUT    /v1/board        {baseVer, env} → {ver} | 409 {ver, env} | 413
    DELETE /v1/board        → 204
    GET    /v1/board/watch  → WebSocket; every accepted PUT broadcasts {ver}
+   PUT    /v1/blob/<id>    sealed image bytes → 204 | 400 | 404 | 410 | 413 | 429 | 507 {used, quota, count, maxCount}
+   GET    /v1/blob/<id>    → sealed image bytes | 404 | 410 | 429
+
+   Images live beside their board, in the same object, under the same token
+   (docs/attachments.md). The relay cannot read the board, so it cannot tell
+   a live image from an orphan: nothing deletes one but deleting the board.
 
    CORS is `*` on purpose: the token is the whole capability and cookies are
    never used, so an origin allowlist adds nothing and would break file://
@@ -28,6 +34,16 @@ const json = (status, body) => new Response(JSON.stringify(body), {
 });
 
 const MAX_BODY = 600_000; // sealed boards are ~10–100 KB; this is generous
+// A 1 MB image plus IV and tag; SQLite-backed objects cap a value at 2 MB.
+const MAX_BLOB = 1_100_000;
+// Per board. A full board stays full: nothing here can tell a live image
+// from an orphan, so nothing frees space short of deleting the board.
+const BLOB_QUOTA = 25 * 1024 * 1024;
+const MAX_BLOBS = 500;
+// New image bytes per hour, per IP and across the relay — the Gate's ledger.
+const BYTES_PER_IP = 200 * 1024 * 1024;
+const BYTES_GLOBAL = 2 * 1024 * 1024 * 1024;
+const BLOB_PATH = /^\/v1\/blob\/([A-Za-z0-9_-]{22})$/;
 
 const clientIp = request => request.headers.get('CF-Connecting-IP') || 'unknown';
 
@@ -40,6 +56,18 @@ const LEDGER = 'creations.1';
     number rather than a per-location guess. The platform's rate-limit binding
     is best-effort and measured permissive on this account, so it is kept as
     defence in depth and this is what actually holds the line. */
+/** Image bytes are budgeted like board creation, but fail CLOSED: refusing
+    an upload costs a retry, while an unbudgeted one costs storage. */
+async function allowBytes(env, ip, n) {
+  try {
+    const gate = env.GATE.get(env.GATE.idFromName(LEDGER));
+    const res = await gate.fetch(`https://gate/bytes?ip=${encodeURIComponent(ip)}&n=${n}`);
+    return res.status === 200;
+  } catch (err) {
+    return false;
+  }
+}
+
 async function allowCreate(env, ip) {
   try {
     const gate = env.GATE.get(env.GATE.idFromName(LEDGER));
@@ -54,9 +82,11 @@ export class Gate {
   constructor(ctx) { this.ctx = ctx; }
 
   async fetch(request) {
-    const ip = new URL(request.url).searchParams.get('ip') || 'unknown';
+    const url = new URL(request.url);
+    const ip = url.searchParams.get('ip') || 'unknown';
     const now = Date.now();
     const HOUR = 3600_000;
+    if (url.pathname === '/bytes') return this.bytes(ip, Math.max(0, +url.searchParams.get('n') || 0), now);
     const PER_IP = 20;      // a person pairs a handful of devices, once
     const GLOBAL = 400;     // a distributed burst still cannot drain the tier
 
@@ -76,11 +106,32 @@ export class Gate {
     return new Response('ok');
   }
 
+  /** Minute buckets of bytes, so the ledger stays small however many
+      uploads there are. */
+  async bytes(ip, n, now) {
+    const HOUR = 3600_000;
+    const minute = Math.floor(now / 60_000);
+    const live = o => Object.fromEntries(Object.entries(o || {}).filter(([m]) => now - (+m) * 60_000 < HOUR));
+    const sum = o => Object.values(o).reduce((a, b) => a + b, 0);
+    const key = `bytes:${ip}`;
+    const mine = live(await this.ctx.storage.get(key));
+    const all = live(await this.ctx.storage.get('bytes:all'));
+    if (sum(mine) + n > BYTES_PER_IP || sum(all) + n > BYTES_GLOBAL) return new Response('no', { status: 429 });
+    mine[minute] = (mine[minute] || 0) + n;
+    all[minute] = (all[minute] || 0) + n;
+    await this.ctx.storage.put({ [key]: mine, 'bytes:all': all });
+    if (!await this.ctx.storage.getAlarm()) await this.ctx.storage.setAlarm(now + 24 * HOUR);
+    return new Response('ok');
+  }
+
   async alarm() {
     const now = Date.now();
     const stale = [];
     for (const [key, times] of await this.ctx.storage.list({ prefix: 'ip:' })) {
       if (!times.some(t => now - t < 3600_000)) stale.push(key);
+    }
+    for (const [key, mins] of await this.ctx.storage.list({ prefix: 'bytes:' })) {
+      if (key !== 'bytes:all' && !Object.keys(mins || {}).some(m => now - (+m) * 60_000 < 3600_000)) stale.push(key);
     }
     if (stale.length) await this.ctx.storage.delete(stale);
   }
@@ -96,10 +147,11 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
     const url = new URL(request.url);
-    if (url.pathname !== '/v1/board' && url.pathname !== '/v1/board/watch') {
+    const isBlob = BLOB_PATH.test(url.pathname);
+    if (url.pathname !== '/v1/board' && url.pathname !== '/v1/board/watch' && !isBlob) {
       return json(404, { error: 'not found' });
     }
-    if (+(request.headers.get('Content-Length') || 0) > MAX_BODY) {
+    if (+(request.headers.get('Content-Length') || 0) > (isBlob ? MAX_BLOB : MAX_BODY)) {
       return json(413, { error: 'too large' });
     }
 
@@ -122,6 +174,10 @@ export default {
     // a header the caller could simply lie about.
     if (url.pathname.endsWith('/watch')) {
       const { success } = await env.WATCH.limit({ key: clientIp(request) });
+      if (!success) return json(429, { error: 'slow down' });
+    }
+    if (isBlob && env.BLOB) {
+      const { success } = await env.BLOB.limit({ key: clientIp(request) });
       if (!success) return json(429, { error: 'slow down' });
     }
 
@@ -148,6 +204,9 @@ export class Board {
         headers: { 'Sec-WebSocket-Protocol': 'kanban.v1' },
       });
     }
+
+    const blob = url.pathname.match(BLOB_PATH);
+    if (blob) return this.blob(request, blob[1]);
 
     if (request.method === 'GET') {
       if (await this.ctx.storage.get('deleted')) return json(410, { error: 'deleted' });
@@ -193,12 +252,73 @@ export class Board {
       // 410 from then on — a stale device cannot quietly resurrect a board
       // its owner chose to wipe. A re-enable mints a new secret = a new slot.
       const ver = ((await this.ctx.storage.get('ver')) || 0) + 1;
-      await this.ctx.storage.delete('env');
+      // The sentinel first: an upload that was waiting on the budget re-checks
+      // it and stops, so nothing lands in a board that is being deleted.
+      await this.ctx.storage.put({ ver, deleted: true });
+      // Its images go with it — ending sync is the one thing that deletes them.
+      for (;;) {
+        const keys = [...(await this.ctx.storage.list({ prefix: 'b:', limit: 64 })).keys()];
+        if (!keys.length) break;
+        await this.ctx.storage.delete([...keys, ...keys.map(k => `s:${k.slice(2)}`)]);
+      }
+      await this.ctx.storage.delete(['env', 'blobBytes', 'blobCount']);
       await this.ctx.storage.put({ ver, deleted: true });
       this.broadcast(ver, true);
       return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store', ...CORS } });
     }
 
+    return json(405, { error: 'method not allowed' });
+  }
+
+  /** An image beside the board. Writable only into a board that exists, so
+      it opens no new unauthenticated way to allocate storage. Immutable:
+      re-sending a stored id is a no-op that counts nothing twice. */
+  async blob(request, id) {
+    if (await this.ctx.storage.get('deleted')) return json(410, { error: 'deleted' });
+    const key = `b:${id}`;
+    if (request.method === 'GET') {
+      const bytes = await this.ctx.storage.get(key);
+      if (!bytes) return json(404, { error: 'no image' });
+      return new Response(bytes, {
+        status: 200,
+        headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store', ...CORS },
+      });
+    }
+    if (request.method === 'PUT') {
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      if (bytes.length > MAX_BLOB) return json(413, { error: 'too large' });
+      if (bytes.length < 28) return json(400, { error: 'bad body' }); // iv + tag at least
+      // Checked twice: once to refuse early, and again after the budget call.
+      // Awaiting the Gate is an outside request, which lets other requests
+      // into this object — two uploads or a DELETE may have landed meanwhile.
+      // Everything from the re-check to the put is storage-only, so nothing
+      // interleaves there.
+      const check = async () => {
+        if (await this.ctx.storage.get('deleted')) return json(410, { error: 'deleted' });
+        if (!((await this.ctx.storage.get('ver')) || 0)) return json(404, { error: 'no board' });
+        if (await this.ctx.storage.get(`s:${id}`) !== undefined) return new Response(null, { status: 204, headers: CORS });
+        const used = (await this.ctx.storage.get('blobBytes')) || 0;
+        const count = (await this.ctx.storage.get('blobCount')) || 0;
+        if (used + bytes.length > BLOB_QUOTA || count + 1 > MAX_BLOBS) {
+          return json(507, { error: 'board full', used, quota: BLOB_QUOTA, count, maxCount: MAX_BLOBS });
+        }
+        return { used, count };
+      };
+      const early = await check();
+      if (early instanceof Response) return early;
+      if (!await allowBytes(this.env, clientIp(request), bytes.length)) return json(429, { error: 'slow down' });
+      const now = await check();
+      if (now instanceof Response) return now;
+      const { used, count } = now;
+      const full = () => json(507, { error: 'board full', used, quota: BLOB_QUOTA, count, maxCount: MAX_BLOBS });
+      try {
+        // one put: the bytes and both totals land together or not at all
+        await this.ctx.storage.put({ [key]: bytes, [`s:${id}`]: bytes.length, blobBytes: used + bytes.length, blobCount: count + 1 });
+      } catch (err) {
+        return full();
+      }
+      return new Response(null, { status: 204, headers: CORS });
+    }
     return json(405, { error: 'method not allowed' });
   }
 
