@@ -361,7 +361,8 @@ h1,h2,h3,p{margin:0}
 .sec-b{padding-bottom:clamp(6px,1vw,12px)}
 /* three vocabularies, one per kind of content:
    mono labels PRINT (a wipe, like the terminal and the copy sweep),
-   type RISES, and surfaces ARRIVE from a little depth. */
+   type RISES, and surfaces are simply there: the crew stands on them, and a
+   panel still fading in left a character standing on nothing. */
 .rv{opacity:0;transform:translateY(16px)}
 .rv.in{opacity:1;transform:none;transition:opacity .62s var(--ease) var(--d,0s), transform .62s var(--ease) var(--d,0s)}
 
@@ -369,11 +370,6 @@ h1,h2,h3,p{margin:0}
 .rv-print.in{
   clip-path:inset(0 -20% -20% 0);opacity:1;
   transition:clip-path .72s var(--ease) var(--d,0s), opacity .18s linear var(--d,0s);
-}
-.rv-panel{opacity:0;transform:translateY(22px) scale(.988)}
-.rv-panel.in{
-  opacity:1;transform:none;
-  transition:opacity .7s var(--ease) var(--d,0s), transform .7s var(--ease) var(--d,0s);
 }
 
 
@@ -498,17 +494,6 @@ h1,h2,h3,p{margin:0}
    against layout shift, and without it they also override the scaled height. */
 .devshot{width:100%;max-width:378px;height:auto;margin:0 auto;display:block}
 
-/* The panel rises as one block; the phone breaks from it and lands a beat
-   later. It is the only object on the page rather than type, so it carries a
-   little more travel, a little scale (it arrives forward, not just up) and a
-   degree of rotation that unwinds — the way something gets set down. Driven
-   off the panel's own .in rather than a second observer, so the stagger is
-   fixed instead of depending on which element trips the threshold first. */
-.devshot{opacity:0;transform:translateY(26px) scale(.965) rotate(1deg)}
-.devices.in .devshot{
-  opacity:1;transform:none;
-  transition:opacity .6s var(--ease) .42s, transform .95s var(--ease) .42s;
-}
 /* ── teams: one person assigns, the other finishes ──── */
 
 .who{padding:18px 16px 20px;background:var(--bg-2);flex:1;display:flex;flex-direction:column;gap:16px}
@@ -552,7 +537,6 @@ main :is(.ctas,.fork,.qa) :is(a,button,summary),.foot a{position:relative;z-inde
 .walker{position:absolute;left:0;top:0;width:48px;height:48px;opacity:0;pointer-events:none;
   user-select:none;-webkit-user-select:none;will-change:transform}
 .walker.on{opacity:1}
-.walker.plane-back.on{opacity:.82}
 .walker .wb{display:block;width:100%;height:100%;transform-origin:50% 100%}
 .walker svg{width:100%;height:100%;display:block}
 .walker .contact{position:absolute;left:25%;right:25%;bottom:0;height:3px;background:#000;opacity:0;border-radius:1px}
@@ -1742,7 +1726,7 @@ repOnce.observe($('#repbody'));
    and falls to the next surface below. At the page's end the rest of the cast
    drops into the footer in three beats and everyone settles there.
 
-   Three planes: back (behind panels and text, peeking over rims), same
+   Three planes: back (falls behind panels and text), same
    (in front of panels, under the page's controls), front (above everything).
    Only a character's painted pixels can be grabbed, and controls always win.
    One rAF loop that sleeps when nothing is near the viewport; layout is read
@@ -1800,8 +1784,14 @@ repOnce.observe($('#repbody'));
       // a surface still rising into place is measured again when it lands
       el.getAnimations().forEach(a => { if (!watched.has(a)) { watched.add(a); a.finished.then(markGeom, () => {}); } });
       const r = el.getBoundingClientRect();
+      // the phone is a tilted cut-out floating in a transparent canvas: stand on
+      // the flattest stretch of its real top edge (measured from the image's
+      // alpha: ~13% down, between 37% and 60% across), not on the empty box
+      if (el.classList.contains('devshot')) {
+        return { l: r.left - b.left + r.width * .37, r: r.left - b.left + r.width * .6, y: r.top - b.top + r.height * .13, el };
+      }
       return { l: r.left - b.left, r: r.right - b.left, y: r.top - b.top, el };
-    }).filter(p => p.r - p.l > 80).sort((a, b) => a.y - b.y);
+    }).filter(p => p.r - p.l > 60).sort((a, b) => a.y - b.y);
     const f = $('.foot'), wr = ($('.foot .wrap') || f).getBoundingClientRect(), fr = f.getBoundingClientRect();
     floor = { l: wr.left - b.left, r: wr.right - b.left, y: fr.top - b.top, el: f, floor: true };
     plats.push(floor);
@@ -1841,7 +1831,7 @@ repOnce.observe($('#repbody'));
     planes[c.plane].append(el);
     const w = { k, el, body: el.firstChild, c, plane: c.plane, x: 0, y: 0, vx: 0, vy: 0, st: 'wait', p: -1, surf: null,
       mode: 'idle', tx: 0, until: 0, face: 1, ph: 0, leave: 0, lean: 0, aim: -1,
-      landAt: -9, impact: 0, launchAt: -9, spin: 0, hops: 0, ink, thrown: false, aimSurf: null };
+      landAt: -9, impact: 0, launchAt: -9, spin: 0, hops: 0, ink, thrown: false, aimSurf: null, free: false, stay: 0 };
     walkers.push(w);
     return w;
   }
@@ -1858,7 +1848,7 @@ repOnce.observe($('#repbody'));
 
   /* ── motion */
   function drop(w, x, fromY) {
-    w.st = 'air'; w.x = x; w.y = fromY; w.vx = 0; w.vy = 0; w.aim = -1;
+    w.st = 'air'; w.x = x; w.y = fromY; w.vx = 0; w.vy = 0; w.aim = -1; w.p = -1; w.free = false;
     w.el.classList.add('on');
   }
   const fallTime = (dy, vy0 = 0) => (-vy0 + Math.sqrt(vy0 * vy0 + 2 * G * Math.max(dy, 0))) / G;
@@ -1868,6 +1858,8 @@ repOnce.observe($('#repbody'));
     const P = plats[i], t = now();
     w.st = 'ground'; w.p = i; w.surf = P.el; w.y = P.y; w.vy = 0; w.vx = 0; w.aim = -1; w.aimSurf = null; w.spin = 0;
     const thrown = w.thrown; w.thrown = false;
+    // put back on a section the crew already left, it stays a while before moving on
+    w.stay = w.free && i < reach && !P.floor ? t + rnd(6, 11) : 0; w.free = false;
     w.mode = 'idle'; w.until = t + rnd(.35, 1.1); w.leave = 0;
     w.landAt = t; w.impact = impact;
     if (impact > 300) dust(w, impact > 900 ? 6 : 3);
@@ -1914,7 +1906,7 @@ repOnce.observe($('#repbody'));
     const P = plats[w.p]; if (!P) return;
     const s = S();
     // time to move on — but never while the reader is still scrolling
-    if (w.p < reach && !P.floor && t > scrollQuiet) {
+    if (w.p < reach && !P.floor && t > scrollQuiet && t > w.stay) {
       if (!w.leave) w.leave = t + (LEAVE_AT[w.k] ?? rnd(0, .9)) + rnd(0, .25);
       if (t >= w.leave && !['peek', 'crouch', 'toEdge'].includes(w.mode)) {
         const toRight = (w.x + s / 2) > (P.l + P.r) / 2;
@@ -1971,8 +1963,25 @@ repOnce.observe($('#repbody'));
     if (w.aim < 0) w.vx *= Math.pow(.6, dt);                 // a little air drag, so throws settle
     w.spin *= Math.pow(.05, dt);
     if (w.vy <= 0) return;
-    // one-way: an aimed jump lands on its target; anything else no higher than the reader's reach
-    const from = w.aim >= 0 ? w.aim : Math.min(reach, plats.length - 1);
+    // falling onto someone's head knocks them off
+    if (w.free || w.vy > 650) {
+      const u = U();
+      for (const o of walkers) {
+        if (o === w || o.st !== 'ground') continue;
+        const head = o.y - s * .8;
+        if (prevY > head + 1 || w.y < head) continue;
+        const f = (head - prevY) / Math.max(w.y - prevY, 1e-6);
+        const cx = prevX + (w.x - prevX) * f + s / 2;
+        if (Math.abs(cx - (o.x + s / 2)) > s * .62) continue;
+        knock(o, cx);
+        w.y = head; w.vy = -Math.max(300, w.vy * .4); w.vx *= .5; w.aim = -1; w.aimSurf = null; w.free = true;
+        w.launchAt = now(); dust(w, 3);
+        return;
+      }
+    }
+    // one-way: an aimed jump lands on its target; something you threw or knocked
+    // lands on whatever is under it; anything else no higher than the reader's reach
+    const from = w.aim >= 0 ? w.aim : w.free ? 0 : Math.min(reach, w.p >= 0 ? w.p : reach, plats.length - 1);
     for (let i = from; i < plats.length; i++) {
       const P = plats[i];
       if (prevY > P.y + 1 || w.y < P.y) continue;
@@ -1986,20 +1995,32 @@ repOnce.observe($('#repbody'));
     }
   }
 
+  function knock(o, cx) {
+    const s = S(), P = plats[o.p], mid = o.x + s / 2;
+    let dir = Math.sign(mid - cx);
+    if (!dir || Math.abs(mid - cx) < s * .12) dir = P && mid - P.l < P.r - mid ? -1 : 1;   // dead centre: the nearer edge
+    // clear the edge: a real knock off, not a shove (the footer has no edge to clear)
+    const d = !P || P.floor ? 0 : dir > 0 ? P.r - o.x : o.x + s - P.l;
+    hop(o, -rnd(540, 600), dir * clamp((d + s) / .42, 300, 2000));   // ~.5 s aloft, drag included
+    o.free = true; o.stay = 0; o.mode = 'idle'; o.spin = dir * 16; o.face = -dir;
+    dust(o, 4);
+  }
+
   /* ── you: the cursor, and grab-and-throw */
   let px = -1e4, py = -1e4, held = null, pendingHold = 0;
   const toLocal = (cx, cy) => ({ x: cx + scrollX - origin.x, y: cy + scrollY - origin.y });
   addEventListener('pointermove', e => { const p = toLocal(e.clientX, e.clientY); px = p.x; py = p.y; }, { passive: true });
 
   /* The characters never catch the pointer themselves — a press is theirs only
-     inside the sprite, only for the planes in front of the page, and only
+     inside the sprite, only where it can be seen, and only
      when nothing interactive is underneath: the page's controls always win. */
   const INTERACTIVE = 'a,button,input,select,textarea,summary,label,.card,.sess,[role="button"]';
   function walkerAt(cx, cy) {
     const p = toLocal(cx, cy), s = S();
     for (let i = walkers.length - 1; i >= 0; i--) {
       const w = walkers[i];
-      if (w.plane === 'back' || w.st === 'wait' || w.el.classList.contains('still')) continue;
+      if (w.st === 'wait' || w.el.classList.contains('still')) continue;
+      if (w.plane === 'back' && w.st !== 'held' && hidden(cx, cy)) continue;
       const u = U(), top = w.y - s + 2 * u;
       let gx = Math.floor((p.x - w.x) / u), gy = Math.floor((p.y - top) / u);
       if (gx < -1 || gx > 16 || gy < -1 || gy > 16) continue;
@@ -2011,6 +2032,16 @@ repOnce.observe($('#repbody'));
       }
     }
     return null;
+  }
+  /* a character behind the page is yours only where you can see it: not
+     through a panel, an image or any painted band in front of it */
+  function hidden(cx, cy) {
+    for (let el = document.elementFromPoint(cx, cy); el && el !== document.body; el = el.parentElement) {
+      if (/^(IMG|SVG|CANVAS|VIDEO|svg)$/.test(el.tagName)) return true;
+      const cs = getComputedStyle(el);
+      if (cs.backgroundImage !== 'none' || !/rgba\(.*,\s*0\)|transparent/.test(cs.backgroundColor)) return true;
+    }
+    return false;
   }
   const overControl = (cx, cy) => { const el = document.elementFromPoint(cx, cy); return !!(el && el.closest(INTERACTIVE)); };
   addEventListener('pointerdown', e => {
@@ -2069,7 +2100,7 @@ repOnce.observe($('#repbody'));
     }
     const r = held.ring, a = r[0], z = r[r.length - 1], dt = Math.max(z.t - a.t, 1 / 60);
     const vx = clamp((z.x - a.x) / dt, -1500, 1500), vy = clamp((z.y - a.y) / dt, -1250, 1450);
-    hop(w, vy, vx); w.thrown = true; w.spin = clamp(vx / 60, -20, 20); w.face = Math.sign(vx) || w.face;
+    hop(w, vy, vx); w.thrown = true; w.free = true; w.spin = clamp(vx / 60, -20, 20); w.face = Math.sign(vx) || w.face;
     if (Math.hypot(vx, vy) > 800) dust(w, 3);
     held = null;
   });
@@ -2119,8 +2150,10 @@ repOnce.observe($('#repbody'));
       const r = held && held.ring, dx = r && r.length > 1 ? r[r.length - 1].x - r[r.length - 2].x : 0;
       rot = clamp(dx * 1.4, -24, 24); sy = 1.06; sx = .95;
     }
-    const sink = w.plane === 'back' && w.st === 'ground' && plats[w.p] && !plats[w.p].floor ? snap(s * .3) : 0;
-    w.el.style.transform = `translate3d(${snap(w.x + shift)}px,${snap(w.y - s + 2 * u + sink + bob)}px,0)`;
+    // everyone stands on the rim itself: on this dark page a rim is too faint to
+    // peek over, so a sunk character read as standing on nothing. The back
+    // plane shows its depth where it reads — falling behind panels and text.
+    w.el.style.transform = `translate3d(${snap(w.x + shift)}px,${snap(w.y - s + 2 * u + bob)}px,0)`;
     w.body.style.transform = `rotate(${rot.toFixed(1)}deg) scale(${(sx * w.face).toFixed(3)},${sy.toFixed(3)})`;
     w.el.classList.toggle('grounded', w.st === 'ground');
   }
@@ -2136,7 +2169,7 @@ repOnce.observe($('#repbody'));
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { sleptAt = now(); sleep(); return; }
     const gap = sleptAt ? now() - sleptAt : 0;               // shift deadlines by the time away
-    walkers.forEach(w => { w.until += gap; if (w.leave) w.leave += gap; });
+    walkers.forEach(w => { w.until += gap; if (w.leave) w.leave += gap; if (w.stay) w.stay += gap; });
     wake();
   });
   function tick() {
