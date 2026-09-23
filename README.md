@@ -45,8 +45,9 @@ holds bytes it cannot decrypt. Every device keeps a complete local copy, and
 sync is reversible from either end. See [docs/sync.md](docs/sync.md).
 
 **A board for your team, beside yours.** The switcher next to the wordmark
-holds your personal board and your teams. **New team board…** asks one thing —
-who you are — and gives you a link for your teammates. On a team board a card
+holds your personal board and your teams. **New team board…** gives you a link
+for your teammates; your name and pixel avatar come from your profile, set
+once from the face in the corner. On a team board a card
 can be assigned, the Mine pill counts what was handed to you, and a Done card
 says who moved it across the line. Your personal board stays yours; there are
 no private cards, because a shared key cannot keep secrets. Your teams follow
@@ -164,7 +165,7 @@ invariants it holds to.
 
 ```bash
 node --test tests/core.test.js     # 114 unit tests, no dependencies
-node --test tests/team.test.js     # 31 team-board and computer rules
+node --test tests/team.test.js     # 32 team-board and computer rules
 node --test tests/cli.test.js      # 31 CLI tests, against a fake relay
 ```
 
@@ -177,7 +178,7 @@ restamping clocks, a concurrent delete losing to a stale edit, and a
 future schema being written back as an old one. Then open `tests/dom.test.html` in Chrome for
 50 interaction tests — they drive the real app in an iframe and report
 pass/fail in the page title, against a `?ns=test` board that never touches
-your data — and `tests/team.dom.test.html` for 18 end-to-end team and computer
+your data — and `tests/team.dom.test.html` for 19 end-to-end team and computer
 flows (two people, one in-memory relay, scratch namespaces only).
 
 ```

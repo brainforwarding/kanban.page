@@ -492,6 +492,7 @@ const BoardCore = (() => {
     for (const x of st.teams || []) m = Math.max(m, x.joinMt || 0, x.mt || 0, x.memberMt || 0);
     for (const ts of Object.values(st.teamsLeft || {})) m = Math.max(m, ts || 0);
     for (const x of Object.values(st.privateSessions || {})) m = Math.max(m, (x && x.mt) || 0);
+    if (st.profile) m = Math.max(m, st.profile.mt || 0);
     return Math.max(m, st.columnsMt || 0, st.projectsMt || 0, st.machinesMt || 0);
   }
 
@@ -616,6 +617,10 @@ const BoardCore = (() => {
       const before = prev.teamsLeft ? prev.teamsLeft[id] : undefined;
       if (before == null || next.teamsLeft[id] !== before) { next.teamsLeft[id] = clock; stamped = true; }
     }
+    // Your profile (personal board): one record, one clock.
+    if (next.profile && canon(itemContent(next.profile)) !== canon(itemContent(prev.profile || {}))) {
+      next.profile.mt = clock; stamped = true;
+    }
     // Private sessions for team cards (personal board), per key.
     const oldPriv = prev.privateSessions || {};
     for (const [k, v] of Object.entries(next.privateSessions || {})) {
@@ -645,6 +650,7 @@ const BoardCore = (() => {
     || (st.teamsLeft && Object.keys(st.teamsLeft).length)
     || (st.machines && st.machines.length)
     || (st.privateSessions && Object.keys(st.privateSessions).length)
+    || !!(st.profile && (st.profile.name || st.profile.avatar))
     || (st.tasks || []).some(t => t.assigneeId || t.assignedBy || t.sessionMachine || t.sessionCwd));
   const syncable = st => {
     const out = {
@@ -664,6 +670,7 @@ const BoardCore = (() => {
     if (st.teamsLeft && Object.keys(st.teamsLeft).length) out.teamsLeft = byKey(st.teamsLeft);
     if (st.machines && st.machines.length) { out.machines = st.machines; out.machinesMt = st.machinesMt || 0; }
     if (st.privateSessions && Object.keys(st.privateSessions).length) out.privateSessions = byKey(st.privateSessions);
+    if (st.profile && (st.profile.name || st.profile.avatar)) out.profile = st.profile;
     return out;
   };
 
@@ -713,6 +720,7 @@ const BoardCore = (() => {
       for (const m of x.members) {
         if (!m || !isStr(m.id) || typeof m.name !== 'string' || !m.name.trim()) return 'a member has no id or name';
         if (m.color !== undefined && typeof m.color !== 'string') return 'a member color is not a string';
+        if (m.avatar !== undefined && m.avatar !== null && typeof m.avatar !== 'string') return 'a member avatar is not a string';
         if (m.mt !== undefined && !isNum(m.mt)) return 'a member clock is not a number';
       }
     }
@@ -739,10 +747,14 @@ const BoardCore = (() => {
       if (!isMap(x.privateSessions)) return 'privateSessions is not an object';
       for (const v of Object.values(x.privateSessions)) if (!isMap(v) || typeof (v.session || '') !== 'string') return 'a private session is malformed';
     }
+    if (x.profile !== undefined) {
+      if (!isMap(x.profile) || typeof (x.profile.name || '') !== 'string'
+        || (x.profile.avatar != null && typeof x.profile.avatar !== 'string')) return 'the profile is malformed';
+    }
     if (kind === 'personal' && x.members !== undefined) return 'a roster cannot land on the personal board';
     if (kind === 'team') {
       if (!Array.isArray(x.members) || !x.members.length) return 'a team board needs its roster';
-      for (const k of ['teams', 'teamsLeft', 'machines', 'privateSessions']) {
+      for (const k of ['teams', 'teamsLeft', 'machines', 'privateSessions', 'profile']) {
         if (x[k] !== undefined) return `${k} cannot land on a team board`;
       }
       // The session firewall: a resume command is private and only works on
@@ -1078,6 +1090,11 @@ const BoardCore = (() => {
     setOrDrop('members', members, !members.length);
     setOrDrop('teams', teams, !teams.length);
     setOrDrop('teamsLeft', Object.fromEntries(Object.entries(teamsLeft).sort(([p], [q]) => p < q ? -1 : 1)), !Object.keys(teamsLeft).length);
+    // Profile: one record, higher clock wins, ties canonical.
+    const pa = a.profile, pb = b.profile;
+    const profile = !pa ? pb : !pb ? pa : (pa.mt || 0) !== (pb.mt || 0) ? ((pa.mt || 0) > (pb.mt || 0) ? pa : pb)
+      : canon(pa) >= canon(pb) ? pa : pb;
+    setOrDrop('profile', profile ? deep(profile) : null, !profile);
     setOrDrop('privateSessions', Object.fromEntries(Object.entries(privateSessions).sort(([p], [q]) => p < q ? -1 : 1)), !Object.keys(privateSessions).length);
     if (machs) { out.machines = deep(machs.items); out.machinesMt = machs.orderMt; }
     delete out.seed; // a merged board is never a replaceable first-run seed

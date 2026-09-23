@@ -126,8 +126,9 @@ request records (`board.req.*`: join, leave, session) that the personal page
 ingests per team with a persisted high-water mark, deleting records only after
 the write reached storage. Never write another namespace's storage directly.
 
-**Identity is attribution.** `by`/`byName` go on events only when `me` is
-known; missing means unattributed, never guessed. `me`, `meSinceClock`,
+**Identity is attribution.** Your name and avatar are a `profile` on the
+personal board; joining a team adds you from it without asking. `by`/`byName`
+go on events only when `me` is known; missing means unattributed, never guessed. `me`, `meSinceClock`,
 `seenAssign`, `assigneeFilter` and the device's computer (`kanban.here`) are
 preferences and never travel. Done-by and "my week" read the log by column id
 (`doneByOf`, `aggregateWeek`'s `byIds`/`doneBy`); the live assignee never

@@ -89,6 +89,7 @@ const BoardI18n = (() => {
     here: 'here', makeHere: 'This is here', private: 'Only you see this',
     needsUpdate: 'This board was saved by a newer version. Update to edit it.',
     personalLinkTeams: 'This link also reaches your team boards.',
+    you: 'You', joinedTeam: 'Joined the team', initials: 'Initials',
   });
   Object.assign(copy.es, {
     personal: 'Personal', team: 'Equipo', newTeamBoard: 'Nuevo tablero de equipo…', joinWithLink: 'Unirse con un enlace…',
@@ -102,6 +103,7 @@ const BoardI18n = (() => {
     here: 'aquí', makeHere: 'Es este', private: 'Solo tú lo ves',
     needsUpdate: 'Este tablero se guardó con una versión más nueva. Actualiza para editarlo.',
     personalLinkTeams: 'Este enlace también da acceso a tus tableros de equipo.',
+    you: 'Tú', joinedTeam: 'Te uniste al equipo', initials: 'Iniciales',
   });
   const valid = x => x === 'es' ? 'es' : 'en';
   const t = (locale, key, vars = {}) => (copy[valid(locale)][key] || copy.en[key] || key)

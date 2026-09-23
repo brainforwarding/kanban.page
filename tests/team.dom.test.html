@@ -78,11 +78,6 @@ async function until(cond, ms = 3000, msg = 'timed out') {
 }
 const ls = () => frame.contentWindow.localStorage;
 const reqKeys = h => Object.keys(ls()).filter(k => k.startsWith(`board.req.${h}.`));
-const typeWho = name => {
-  const input = D.querySelector('#who-list input');
-  input.value = name;
-  input.dispatchEvent(new W.Event('input', { bubbles: true }));
-};
 
 let teamNs = null, teamSecret = null, cardId = null;
 /* Two people in one browser share every namespace, so each "device" keeps its
@@ -104,31 +99,47 @@ function become(who) {
   for (const k of Object.keys(ls())) if (/^(board\.(v2|sync|req|read)\.(tt|t-)|kanban\.here\.tt|board\.v2\.tt2|board\.sync\.tt2|board\.req\.tt2)/.test(k)) ls().removeItem(k);
   await go(home());
 
-  await test('a personal board shows the switcher and no team UI', async () => {
+  await test('a personal board shows the switcher, an empty face slot, and no team UI', async () => {
     eq(D.querySelector('#sw-label').textContent, 'Personal');
+    assert(D.querySelector('#me .av.empty'), 'no profile yet: an empty outline, nothing nags');
     assert(D.querySelector('#members').hidden, 'no roster, no avatars');
     assert(!D.querySelector('.pill.mine'), 'no Mine pill');
   });
 
-  await test('New team board asks who you are, requires a name, then syncs with the roster', async () => {
+  await test('you set your name and avatar once; closing saves, and cards stay bare', async () => {
+    W.addTask({ title: 'Mine alone', columnId: W.__board.state.columns[0].id });
+    await sleep(150);
+    D.querySelector('#me').click();
+    await sleep(40);
+    const input = D.querySelector('#pf-name');
+    input.value = 'Sebastián';
+    input.dispatchEvent(new W.Event('input', { bubbles: true }));
+    D.querySelector('.pf-tile[data-av="byte"]').click();
+    D.body.click(); // closing = saving
+    await sleep(200);
+    eq(W.__board.state.profile.name, 'Sebastián');
+    eq(W.__board.state.profile.avatar, 'byte');
+    assert(D.querySelector('#me .av.pix svg'), 'the rail shows your avatar');
+    assert(!D.querySelector('.card .av'), 'a personal board never puts avatars on cards');
+    eq(W.BoardCore.syncable(W.__board.state).v, 3, 'a profile makes the personal board v3');
+  });
+
+  await test('New team board uses your profile: no question, you are its first member', async () => {
     const nav = new Promise(r => frame.addEventListener('load', r, { once: true }));
     W.newTeamBoard();
-    await nav; W = frame.contentWindow; D = W.document; await sleep(300);
+    await nav; W = frame.contentWindow; D = W.document;
+    await until(() => W.__board.sync && W.__board.sync.ver > 0, 3000, 'first push never landed');
     teamNs = new URLSearchParams(W.location.search).get('ns');
     assert(W.BoardCore.isTeamNs(teamNs), 'navigated to a derived team namespace');
-    assert(!D.querySelector('#whoami').hidden, 'Who are you? is open');
-    assert(D.querySelector('#who-join').disabled, 'Join waits for a name');
-    typeWho('Sebastián');
-    assert(!D.querySelector('#who-join').disabled, 'a name enables Join');
-    D.querySelector('#who-join').click();
-    await until(() => W.__board.sync && W.__board.sync.ver > 0, 3000, 'first push never landed');
+    assert(D.querySelector('#profileMenu').hidden, 'nothing was asked');
     teamSecret = W.__board.sync.secret;
     eq(W.BoardCore.teamNs(await W.BoardCore.teamIdOf(teamSecret)), teamNs, 'the namespace is derived from the secret');
     const remote = await relayBoard(teamSecret);
     eq(remote.v, 3, 'a team board is v3 on the wire');
     eq(remote.members.length, 1);
     eq(remote.members[0].name, 'Sebastián');
-    assert(!('me' in remote), 'who I am never travels');
+    eq(remote.members[0].avatar, 'byte', 'with your avatar');
+    assert(!('me' in remote) && !('profile' in remote), 'who I am never travels to the team');
     assert(reqKeys('tt').length >= 1, 'a join request waits for the personal board');
   });
 
@@ -150,28 +161,21 @@ function become(who) {
     ls().removeItem(`board.sync.${teamNs}`);
     await go(teamUrl(teamNs));
     await until(() => W.__board.sync && (W.__board.state.members || []).length, 3000, 'did not adopt');
-    assert(D.querySelector('#whoami').hidden, 'no Who are you? — the entry knows');
+    assert(D.querySelector('#profileMenu').hidden, 'no question — the entry knows');
     eq(W.__board.state.me, meBefore, 'identity came from the teams entry');
   });
 
-  await test('a second person joins through the link and picks a new name', async () => {
+  await test('a second person joins through the link with no question, as their own profile', async () => {
     await go('?ns=tt2&home=tt2');
+    W.__board.state.profile = { name: 'Andrea', avatar: 'miso' }; W.save(); await sleep(200);
     become('andrea');
     await go(teamUrl(teamNs, 'tt2'), `#sync=${teamSecret}`);
-    await until(() => !D.querySelector('#whoami').hidden, 3000, 'Who are you? did not open');
-    const names = [...D.querySelectorAll('.who-row .who-name')].map(n => n.textContent);
-    assert(names.includes('Sebastián'), 'the roster is listed');
-    D.querySelector('.who-row.add').click();
-    typeWho('sebastián');
-    D.querySelector('#who-join').click();
-    await sleep(60);
-    assert(!D.querySelector('#whoami').hidden, 'a duplicate name selects the existing row instead of joining');
-    D.querySelector('.who-row.add').click();
-    typeWho('Andrea');
-    D.querySelector('#who-join').click();
-    await sleep(80);
+    await until(() => W.__board.state.me, 3000, 'did not join');
+    assert(D.querySelector('#profileMenu').hidden, 'no picker');
     eq(W.__board.state.members.length, 2);
     eq(W.me().name, 'Andrea');
+    eq(W.me().avatar, 'miso');
+    assert(D.querySelector('#members .av.pix'), 'the teammate shows in the rail');
     await W.push();
     eq((await relayBoard(teamSecret)).members.length, 2, 'the roster reached the relay');
   });
@@ -209,20 +213,26 @@ function become(who) {
     assert(!D.querySelector(`.card[data-id="${cardId}"]`).classList.contains('fresh'), 'seen');
   });
 
-  await test('you can rename yourself; old events keep the old name', async () => {
+  await test('changing your profile on a team renames you there; old events keep the old name', async () => {
     const before = W.__board.state.events.filter(e => e.by === W.__board.state.me).map(e => e.byName);
-    W.openWho('join');
-    const mine = [...D.querySelectorAll('.who-row')].find(r => r.getAttribute('aria-pressed') === 'true');
-    mine.click();
-    const input = D.querySelector('#who-list input[data-rename]');
-    assert(input, 'your row became a text field');
+    D.querySelector('#me').click();
+    await sleep(40);
+    const input = D.querySelector('#pf-name');
     input.value = 'Seba';
     input.dispatchEvent(new W.Event('input', { bubbles: true }));
-    D.querySelector('#who-join').click();
-    await sleep(80);
+    D.querySelector('.pf-tile[data-av="kit"]').click();
+    W.closeProfile();
+    await sleep(200);
     eq(W.me().name, 'Seba');
+    eq(W.me().avatar, 'kit');
     assert(W.__board.state.events.filter(e => e.by === W.__board.state.me).every((e, i) => e.byName === before[i]), 'history untouched');
-    W.me().name = 'Sebastián'; W.save(); W.render(); await sleep(150);
+    D.querySelector('#me').click(); await sleep(40);
+    D.querySelector('#pf-name').value = 'Sebastián';
+    D.querySelector('.pf-tile[data-av="byte"]').click();
+    W.closeProfile(); await sleep(200);
+    await go(home()); await sleep(100);
+    eq(W.__board.state.profile.name, 'Sebastián', 'the profile change reached the personal board');
+    await go(teamUrl(teamNs));
   });
 
   await test('Mine and Unassigned filter the board', async () => {

@@ -214,7 +214,7 @@ personal board without sync keeps `teams` on this device only.
 
 - live entry, namespace free here → the switcher lists it; opening adopts
   through the pristine path with the entry's secret and sets
-  `me = memberId`, so there is no **Who are you?** step;
+  `me = memberId`, so nothing is asked;
 - live entry, namespace bound to a different secret → inactive (collisions);
 - tombstoned team, namespace synced here → Disconnect that namespace (forget
   its key, keep its local board), as the existing Disconnect does.
@@ -222,7 +222,7 @@ personal board without sync keeps `teams` on this device only.
 ### Who I am — local preferences (team boards)
 
 ```js
-me: memberId | null        // set from the teams entry, or by Who are you?
+me: memberId | null        // set from the teams entry, or by joining with your profile
 meSinceClock: number       // clockMax(board) at the moment `me` was set
 seenAssign: { [taskId]: assigneeClock }
 ```
@@ -293,13 +293,34 @@ with a link…**. Choosing navigates to its `?ns=`. One board per tab; no
 combined board view. The list is the personal board's `teams` plus any pending
 local requests; a team page reads the personal board's storage read-only.
 
+### You: a profile, set once
+
+Your name and avatar belong to you, not to each team.
+
+```js
+profile: { name, avatar, mt }   // personal board only, synced to your devices
+```
+
+- **Where:** your face in the rail, top right, on every board. Tapping it opens
+  a popover: the name, and twelve 16×16 pixel avatars plus Initials. No
+  button — closing it saves. Until it is set, the slot is an empty outline.
+- **Merge:** one record, higher `mt` wins. A v3 trigger; legal only on the
+  personal namespace. A team page changes it through a `profile` request
+  record, like joins and leaves.
+- **Your roster entry follows it:** each team page updates your member's name
+  and avatar from the profile when it opens. Old events keep `byName`.
+- **Avatars on cards only on team boards**, where they say who owns what. A
+  personal board shows your face in the rail and nowhere else.
+- **Sprites** ship inside the app as 16×16 maps drawn as SVG squares, only at
+  whole-number sizes (16px on cards, 32px in the picker, 48px in the preview).
+  `member.avatar` is one of their names, or absent for initials.
+
 ### New team board
 
 1. Mint the secret, derive `teamId` and the namespace, navigate.
-2. **Who are you?** with an empty roster: only **Add your name**. It cannot be
-   dismissed into a usable board — a team board without its first member
-   would be rosterless forever. Back returns to the previous board and
-   discards the namespace.
+2. Your profile becomes the first member. Only with no profile does the
+   popover open first; closing it without a name discards the namespace — a
+   team board without its first member would be rosterless forever.
 3. Turn sync on (the network consent); the sync sheet opens connected, with
    the link to share. Queue the `teams` entry.
 
@@ -308,26 +329,16 @@ local requests; a team page reads the personal board's storage read-only.
 Paste a link or raw secret (**Join with a link…**) or open a link. The
 candidate is fetched and decrypted first; if it has a roster, the app routes
 to its derived namespace before adopting (board kind). Adoption there follows
-`sync-joining.md`. Then, only if the adopted board has a roster and `me` is
-not already known from your `teams`, show **Who are you?**. Pairing a phone to
-your personal board has no roster and so no new step.
-
-### Who are you?
-
-- Title **Who are you?**, one row per member, a last row **+ Add your name**,
-  footer **Back** / **Join**. No other copy.
-- **Add your name** turns into a text field in place; initials and color
-  preview as you type; Enter or **Join** commits. Blank names cannot commit.
-  A name equal (case-insensitive) to an existing member's selects that row.
-- Commit sets `me` and `meSinceClock`, queues the `teams` entry.
-- When joining, dismissing leaves the board adopted with `me` unset: it syncs,
-  attributes nothing, cannot assign, and the rail avatars offer the step again.
-- **Rename:** tap the rail avatars, then your own (chosen) row again; it
-  becomes a text field.
+`sync-joining.md`. Then, if `me` is not already known from your `teams`, your
+profile is added to the roster — **no question**, and a toast says you joined.
+A teammate with the same name is not a question either: the avatar tells two
+people apart, and either can rename. Only with no profile does the popover
+open, once. Pairing a phone to your personal board has no roster and so no new
+step.
 
 ## Surfaces on a team board
 
-- **Rail:** member avatars before search.
+- **Rail:** your teammates' avatars before search; yours is the profile slot.
 - **Filters:** **Mine** and **Unassigned** join the project pills, compose
   with a project filter (AND), and are preferences.
 - **Card:** assignee avatar at the end of the meta row. A card in the done
@@ -465,9 +476,9 @@ Core:
 DOM (`?ns=test`):
 
 11. a board with no roster renders with no team UI;
-12. Who are you?: pick, add in place, duplicate name selects existing,
-    required on New team board, dismissible on join; assign disabled without
-    `me`;
+12. profile: set once from the rail, closing saves, never on personal cards;
+    New team board and joining add you from it with no question; changing it
+    on a team renames your member there and history keeps the old name;
 13. assignee, avatar, Mine/Unassigned; New only after `meSinceClock`, clears
     on open;
 14. request records: two tabs enqueue concurrently and both apply; leave then
@@ -480,7 +491,7 @@ DOM (`?ns=test`):
     `migrate` on load, storage event, import and adoption; incompatible
     remote head is terminal;
 16. teams: a synced `teams` entry lists
-    the team and adoption skips Who are you?; a `left` entry disconnects;
+    the team and adoption asks nothing; a `left` entry disconnects;
 17. report: tags, grouping, colors, `rowKey` selection, no date editor on
     other-board rows, one export; late read-only fetch inert after close;
     fetch while the current namespace is synced.

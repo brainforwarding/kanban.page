@@ -1291,6 +1291,7 @@ function render() {
   document.documentElement.dataset.density = state.density;
   renderSwitcher();
   renderMembers();
+  renderMe();
   renderFilters();
   flip(renderBoard);
 }
@@ -3191,7 +3192,7 @@ function hideToast() {
 function syncScrim() {
   const was = scrim.hidden;
   scrim.hidden = editor.hidden && panel.hidden && reportEl.hidden && archiveEl.hidden && syncEl.hidden
-    && $('#whoami').hidden && $('#computers').hidden;
+    && $('#computers').hidden;
   // A scrim that has just appeared has not been pressed yet. See below.
   if (was && !scrim.hidden) scrimPressed = false;
 }
@@ -3265,7 +3266,7 @@ document.addEventListener('keydown', e => {
     if (!boardsMenu.hidden) { closeBoardsMenu(); return; }
     if (!machineMenu.hidden) { closeMachineMenu(); return; }
     if (!compPanel.hidden) { closeComputers(); return; }
-    if (!whoEl.hidden) { if (whoMode !== 'create') closeWho(); return; }
+    if (!profileMenu.hidden) { closeProfile(); return; }
     closeComposer();
     return;
   }
@@ -3663,7 +3664,8 @@ const initials = name => {
 };
 function avatarHtml(m, cls = '') {
   if (!m) return '';
-  return `<span class="av ${cls}" style="--c:${m.color || COLORS[7]}" title="${esc(m.name)}">${esc(initials(m.name))}</span>`;
+  const pix = m.avatar && SPRITES[m.avatar];
+  return `<span class="av ${pix ? 'pix ' : ''}${cls}" style="--c:${m.color || COLORS[7]}" title="${esc(m.name)}">${pix ? spriteSvg(m.avatar) : esc(initials(m.name))}</span>`;
 }
 function nextMemberColor() {
   const used = new Set((state.members || []).map(m => m.color));
@@ -3692,7 +3694,7 @@ function reqRecords() {
   } catch (err) { /* storage unavailable: nothing queued */ }
   return out;
 }
-const reqGroup = r => (r.kind === 'session' ? 'session:' : 'team:') + r.key;
+const reqGroup = r => (r.kind === 'session' ? 'session:' : r.kind === 'profile' ? 'profile:' : 'team:') + r.key;
 const newerReq = (a, b) => b.order > a.order || (b.order === a.order && b.reqId > a.reqId) ? b : a;
 function latestReq(group) {
   const list = reqRecords().filter(r => reqGroup(r) === group);
@@ -3769,6 +3771,9 @@ function applyRequest(r) {
     for (const k of Object.keys(state.privateSessions || {})) {
       try { if (JSON.parse(k)[0] === r.key) state.privateSessions[k] = { session: '' }; } catch (err) { /* foreign key */ }
     }
+  } else if (r.kind === 'profile') {
+    const p = r.payload || {};
+    if (typeof p.name === 'string' && p.name.trim()) state.profile = { ...(state.profile || {}), name: p.name.trim(), avatar: p.avatar || null };
   } else if (r.kind === 'session') {
     let p = r.payload || {};
     let teamId = null;
@@ -3788,7 +3793,7 @@ function liveTeams() {
   const home = homeBoard();
   const teams = new Map((home.teams || []).map(t => [t.id, t]));
   for (const r of reqRecords()) {
-    if (r.kind === 'session') continue;
+    if (r.kind !== 'join' && r.kind !== 'leave') continue;
     const top = latestReq(reqGroup(r));
     if (top.order <= (((home.teamsReqApplied || {})[reqGroup(r)]) || 0)) continue;
     if (top.kind === 'leave') teams.delete(r.key);
@@ -3990,143 +3995,165 @@ function leaveTeam() {
   }, 8000);
 }
 
-/* who are you? */
+/* you: a profile and a pixel avatar ─────────────────────
+   Your name and avatar belong to you, not to each team: they live on the
+   personal board (synced to your devices) and fill your roster entry on every
+   team you join, with no question asked. The sprites are 16×16 maps drawn as
+   SVG squares, so they are sharp at 16/32/48px and cost no downloads. */
 
-const whoEl = $('#whoami');
-let whoMode = null;       // 'create' | 'join'
-let whoPick = null;       // chosen member id
-let whoAdding = false;
-let whoRenaming = false;  // your own row, as a text field
-let pendingNewSecret = null;
-
-function openWho(mode) {
-  whoMode = mode;
-  whoPick = mode === 'join' ? state.me : null;
-  whoAdding = mode === 'create' || !(state.members || []).length;
-  whoRenaming = false;
-  closeComposer();
-  scrim.hidden = false;
-  whoEl.hidden = false;
-  renderWho();
-}
-function closeWho() {
-  whoEl.hidden = true;
-  whoMode = null;
-  syncScrim();
-  flushExternal();
-}
-function renderWho() {
-  $('#whoTitle').textContent = tr('whoAreYou');
-  $('#who-back').textContent = tr('back');
-  $('#who-join').textContent = tr('join');
-  const list = $('#who-list');
-  const typed = list.querySelector('input') ? list.querySelector('input').value : '';
-  list.innerHTML = '';
-  [...(state.members || [])].sort((a, b) => a.name.localeCompare(b.name)).forEach(m => {
-    if (whoRenaming && m.id === state.me) {
-      // rename yourself in place; old events keep the name they were logged with
-      const row = document.createElement('label');
-      row.className = 'who-row adding';
-      row.innerHTML = `${avatarHtml(m, 'lg')}<input type="text" spellcheck="false" autocomplete="off" data-rename value="${esc(m.name)}">`;
-      const input = $('input', row);
-      input.addEventListener('input', syncWhoJoin);
-      input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commitWho(); } });
-      list.append(row);
-      requestAnimationFrame(() => { input.focus(); input.select(); });
-      return;
+const SPRITES = {"blink":["Blink",{"k":"#1B1726","a":"#FFB454","b":"#E08A2A","c":"#FFE0A8","p":"#FF8FA3"},["................","....kkkkkkkk....","...kaaaaaaaak...","...kacaaaaaak...","...kacaaaaaak...","...kaaaaaaaak...","...kaakaakaak...","...kaakaakaak...","...kpaaaaaapk...","...kaaakkaaak...","...kaaaaaaaak...","...kbaaaaaabk...","...kbbbbbbbbk...","....kkkkkkkk....",".....kk..kk.....","................"]],"stick":["Stick",{"k":"#1B1726","a":"#FFE27A","b":"#E8BE3C","p":"#FF8FA3"},["................",".kkkkkkkkkkkkk..",".kaaaaaaaaaaak..",".kaaaaaaaaaaak..",".kaaaaaaaaaaak..",".kaaakaaaakaak..",".kaaakaaaakaak..",".kapaaaaaaaapk..",".kaaaaakkaaaak..",".kaaaaaaaaaaak..",".kaaaaaaaaaaak..",".kaaaaaaaaaabk..",".kaaaaaaaaabbk..",".kaaaaaaaabbbk..",".kkkkkkkkkkkkk..","................"]],"byte":["Byte",{"k":"#1B1726","a":"#B8C4D6","c":"#FFB454","d":"#27305A","e":"#8FE3FF","p":"#FF8FA3"},[".......k........","......kck.......",".......k........","..kkkkkkkkkkkk..","..kaaaaaaaaaak..","..kakkkkkkkkak..","..kakddddddkak..","..kakdeddedkak..","..kakdeddedkak..","..kakpdeedpkak..","..kakkkkkkkkak..","..kaaaaaaaaaak..","..kkkkkkkkkkkk..","....kaak.kaak...","....kkkk.kkkk...","................"]],"ember":["Ember",{"k":"#1B1726","a":"#FF7A2E","c":"#FFB454","d":"#FFD66B","p":"#FF8FA3"},[".......k........","......kck.......","......kcck......",".....kccak......","..k..kcaak..k...",".kck.kaaaak.kck.",".kcakaaaaaakack.",".kaaaaaaaaaaaak.","kaaddddddddddaak","kaaddkddddkddaak","kaaddkddddkddaak","kaadpddkkddpdaak",".kaddddddddddak.","..kaaddddddaak..","...kkkkkkkkkk...","................"]],"mochi":["Mochi",{"k":"#1B1726","w":"#FFF1F4","b":"#F7C6D2","c":"#FFFFFF","p":"#FF8FA3"},["................","................",".....kkkkkk.....","...kkwwwwwwkk...","..kwwcwwwwwwwk..",".kwwcwwwwwwwwwk.",".kwwwwwwwwwwwwk.","kwwwwkwwwwkwwwwk","kwwwwkwwwwkwwwwk","kwwppwwkkwwppwwk","kwwwwwwwwwwwwwwk",".kwwwwwwwwwwwwk.",".kbwwwwwwwwwwbk.","..kkbbbbbbbbkk..","....kkkkkkkk....","................"]],"boo":["Boo",{"k":"#1B1726","a":"#C9B6FF","b":"#A58BF0","c":"#EEE6FF","p":"#FF8FA3"},["................",".....kkkkkk.....","...kkaaaaaakk...","..kaacaaaaaaak..",".kaacaaaaaaaaak.",".kaaaaaaaaaaaak.",".kaaakaaaakaaak.",".kaaakaaaakaaak.",".kapaaakkaaapak.",".kaaaaaaaaaaaak.",".kaaaaaaaaaaaak.",".kbaaaaaaaaaabk.",".kbbkbbbbbbkbbk.",".kk..kkkkkk..kk.","................","................"]],"crunch":["Crunch",{"k":"#1B1726","a":"#FF8A3D","b":"#E06A1F","c":"#FFC08A","g":"#6BCB77","p":"#FF8FA3"},["......k..k......",".....kgkkgk.....","....kgcggcgk....",".....kggggk.....","....kkkkkkkk....","...kaaaaaaaak...","...kacaaaaaak...","...kakaaaakak...","...kakaaaakak...","...kpaakkaapk...","....kaabaaak....","....kaaaaaak....",".....kabaak.....",".....kaaak......","......kak.......",".......k........"]],"miso":["Miso",{"k":"#1B1726","a":"#F2A65A","c":"#FFB3C1","p":"#FF8FA3"},["................","..kk........kk..","..kck......kck..","..kaak....kaak..","..kaaakkkkaaak..",".kaaaaaaaaaaaak.",".kaaaaaaaaaaaak.",".kaakaaaaaakaak.",".kaakaaaaaakaak.",".kpaaaakkaaaapk.",".kaaaakaakaaaak.",".kaaaaaaaaaaaak.","..kaaaaaaaaaak..","...kkkkkkkkkk...","................","................"]],"pip":["Pip",{"k":"#1B1726","a":"#7ED67A","b":"#57B35A","w":"#FFFFFF","e":"#1B1726","p":"#FF8FA3"},["................","...kkk....kkk...","..kwwek..kewwk..","..kwwek..kewwk..","..kkaakkkkaakk..",".kaaaaaaaaaaaak.",".kaaaaaaaaaaaak.",".kpaaaaaaaaaapk.",".kaaakkkkkkaaak.",".kaaaaaaaaaaaak.","..kaaaaaaaaaak..",".kbbkaaaaaakbbk.",".kkkkkkkkkkkkkk.","................","................","................"]],"kit":["Kit",{"k":"#1B1726","a":"#FF8A3D","w":"#FFF4EA","c":"#FFC08A","p":"#FF8FA3"},["................",".kk..........kk.",".kak........kak.",".kaak......kaak.",".kaaakkkkkkaaak.",".kaaaaaaaaaaaak.","kaaaaaaaaaaaaaak","kaaakaaaaaakaaak","kaaakaaaaaakaaak","kwwpwaaaaaawpwwk",".kwwwwwkkwwwwwk.","..kwwwwwwwwwwk..","...kkwwwwwwkk...",".....kkkkkk.....","................","................"]],"pebble":["Pebble",{"k":"#1B1726","d":"#2E3A5C","w":"#FFFFFF","b":"#FFA24C","p":"#FF8FA3"},["................",".....kkkkkk.....","...kkddddddkk...","..kddddddddddk..","..kddwwwwwwddk..",".kddwwwwwwwwddk.",".kddwkwwwwkwddk.",".kddwkwwwwkwddk.",".kddpwwbbwwpddk.",".kddwwwwwwwwddk.","kdddwwwwwwwwdddk","kdddwwwwwwwwdddk",".kddwwwwwwwwddk.","..kddwwwwwwddk..","...kbbkkkkbbk...","................"]],"bun":["Bun",{"k":"#1B1726","w":"#FFFFFF","c":"#FFB3C1","b":"#E6E1EE","p":"#FF8FA3"},["...kk......kk...","..kwck....kcwk..","..kwck....kcwk..","..kwck....kcwk..","..kwwk....kwwk..","..kwwkkkkkkwwk..",".kwwwwwwwwwwwwk.","kwwwwwwwwwwwwwwk","kwwwkwwwwwwkwwwk","kwwwkwwwwwwkwwwk","kwwpwwwccwwwpwwk","kwwwwwwkkwwwwwwk",".kwwwwwwwwwwwwk.",".kbwwwwwwwwwwbk.","..kkkkkkkkkkkk..","................"]]};
+const spriteCache = {};
+function spriteSvg(key) {
+  if (spriteCache[key]) return spriteCache[key];
+  const s = SPRITES[key];
+  if (!s) return '';
+  const [, pal, rows] = s;
+  let rects = '';
+  rows.forEach((row, y) => {
+    for (let i = 0; i < 16;) {
+      const ch = row[i];
+      if (ch === '.' || !pal[ch]) { i++; continue; }
+      let j = i;
+      while (j < 16 && row[j] === ch) j++;
+      rects += `<rect x="${i}" y="${y}" width="${j - i}" height="1" fill="${pal[ch]}"/>`;
+      i = j;
     }
-    const b = document.createElement('button');
-    b.className = 'who-row';
-    b.setAttribute('aria-pressed', String(whoPick === m.id && !whoAdding));
-    b.innerHTML = `${avatarHtml(m, 'lg')}<span class="who-name">${esc(m.name)}</span>${whoPick === m.id && !whoAdding ? `<span class="bm-check">${ICON.check}</span>` : ''}`;
-    b.onclick = () => {
-      // tapping your own chosen row again renames you
-      if (whoPick === m.id && m.id === state.me && !whoAdding) whoRenaming = true;
-      whoPick = m.id; whoAdding = false; renderWho();
-    };
-    list.append(b);
   });
-  if (whoAdding) {
-    const row = document.createElement('label');
-    row.className = 'who-row adding';
-    row.innerHTML = `<span class="av lg preview" style="--c:${nextMemberColor()}"></span><input type="text" spellcheck="false" autocomplete="off" placeholder="${esc(tr('yourName'))}">`;
-    const input = $('input', row);
-    input.value = typed;
-    const preview = () => { $('.preview', row).textContent = input.value.trim() ? initials(input.value) : ''; syncWhoJoin(); };
-    input.addEventListener('input', preview);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commitWho(); } });
-    list.append(row);
-    preview();
-    requestAnimationFrame(() => input.focus());
-  } else {
-    const add = document.createElement('button');
-    add.className = 'who-row add';
-    add.innerHTML = `<span class="av lg ghost">${ICON.plus}</span><span class="who-name">${esc(tr('addYourName'))}</span>`;
-    add.onclick = () => { whoAdding = true; whoPick = null; renderWho(); };
-    list.append(add);
-  }
-  syncWhoJoin();
+  return (spriteCache[key] = `<svg viewBox="0 0 16 16" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`);
 }
-function syncWhoJoin() {
-  const input = $('#who-list input');
-  $('#who-join').disabled = (whoAdding || whoRenaming) ? !(input && input.value.trim()) : !whoPick;
+
+/** The profile, as this page sees it: the personal board's, plus a change
+    queued from this page that the personal board has not ingested yet. */
+function myProfile() {
+  const home = homeBoard();
+  const pend = latestReq('profile:me');
+  if (pend && pend.order > (((home.teamsReqApplied || {})['profile:me']) || 0)) return pend.payload || {};
+  return (IS_HOME ? state.profile : home.profile) || {};
 }
-async function commitWho() {
-  let pick = whoPick;
-  if (whoRenaming) {
-    const input = $('#who-list input[data-rename]');
-    const name = input ? input.value.trim() : '';
-    const mine = memberOf(state.me);
-    if (!name || !mine) return;
-    if (name !== mine.name) { mine.name = name; save(); }
-    whoRenaming = false;
-    closeWho();
+const profileColor = () => COLORS[2];
+
+const profileMenu = $('#profileMenu');
+let profileMode = null;     // null | 'join' | 'create'
+let profileDraft = null;    // { name, avatar }
+
+function renderMe() {
+  const el = $('#me');
+  const p = myProfile();
+  const who = IS_TEAM ? me() : null;
+  const face = who ? avatarHtml(who) : p.name || p.avatar
+    ? avatarHtml({ name: p.name || '?', avatar: p.avatar, color: profileColor() })
+    : '<span class="av empty"></span>';
+  el.innerHTML = face;
+  el.title = p.name || tr('you');
+}
+
+function openProfile(mode = null) {
+  profileMode = mode;
+  const p = myProfile();
+  const who = IS_TEAM ? me() : null;
+  profileDraft = { name: (who && who.name) || p.name || '', avatar: (who && who.avatar) || p.avatar || null };
+  renderProfile();
+  const r = $('#me').getBoundingClientRect();
+  profileMenu.style.top = `${r.bottom + 8}px`;
+  profileMenu.style.right = `${Math.max(8, innerWidth - r.right)}px`;
+  profileMenu.style.left = 'auto';
+  profileMenu.hidden = false;
+  requestAnimationFrame(() => { const i = $('#pf-name'); if (i) i.focus(); });
+}
+
+function renderProfile() {
+  const d = profileDraft;
+  const faces = Object.keys(SPRITES).map(k => `<button class="pf-tile${d.avatar === k ? ' on' : ''}" data-av="${k}" title="${esc(SPRITES[k][0])}">${spriteSvg(k)}</button>`).join('');
+  profileMenu.innerHTML = `
+    <label class="pf-row">${avatarHtml({ name: d.name || '?', avatar: d.avatar, color: me() ? me().color : profileColor() }, 'xl')}
+      <input id="pf-name" type="text" spellcheck="false" autocomplete="off" placeholder="${esc(tr('yourName'))}" value="${esc(d.name)}"></label>
+    <div class="pf-grid">${faces}<button class="pf-tile initials${!d.avatar ? ' on' : ''}" data-av="" title="${esc(tr('initials'))}">${esc(initials(d.name || '?'))}</button></div>`;
+  const input = $('#pf-name');
+  input.addEventListener('input', () => { profileDraft.name = input.value; const t = $('.pf-tile.initials', profileMenu); if (t) t.textContent = initials(input.value || '?'); const av = $('.pf-row .av', profileMenu); if (av && !profileDraft.avatar) av.textContent = initials(input.value || '?'); });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); closeProfile(); } });
+  $$('.pf-tile', profileMenu).forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    profileDraft.avatar = b.dataset.av || null;
+    profileDraft.name = input.value;
+    renderProfile();
+  });
+}
+
+/** Closing saves — the rule for every text surface in this app. */
+async function closeProfile() {
+  if (profileMenu.hidden) return;
+  const input = $('#pf-name');
+  const name = ((input && input.value) || profileDraft.name || '').trim();
+  const avatar = profileDraft.avatar || null;
+  const mode = profileMode;
+  profileMenu.hidden = true;
+  profileMode = null;
+  if (!name) {
+    // A new team cannot start without its first member: discard it.
+    if (mode === 'create') discardNewTeam();
     render();
     return;
   }
-  if (whoAdding) {
-    const input = $('#who-list input');
-    const name = input ? input.value.trim() : '';
-    if (!name) return;
-    const same = (state.members || []).find(m => m.name.trim().toLowerCase() === name.toLowerCase());
-    if (same) { whoPick = same.id; whoAdding = false; renderWho(); return; } // pick, don't duplicate
-    const m = { id: C.uid(), name, color: nextMemberColor() };
-    state.members = [...(state.members || []), m];
-    pick = m.id;
+  const p = myProfile();
+  if (p.name !== name || (p.avatar || null) !== avatar) {
+    if (IS_HOME) { state.profile = { ...(state.profile || {}), name, avatar }; save(); }
+    else enqueue('profile', 'me', { name, avatar });
   }
-  if (!pick) return;
-  const mode = whoMode;
-  setMe(pick);
-  flushPendingSave();
-  closeWho();
-  if (mode === 'create') {
-    $('#who-join').disabled = true;
-    const ok = await enableSync(pendingNewSecret);
-    if (!ok) { toast(tr('syncFailed')); return; }
-    pendingNewSecret = null;
-    enqueue('join', TEAM_ID, { id: TEAM_ID, ns: NS, label: tr('team'), secret: sync.secret, memberId: pick });
-    openSync('on');
-  } else if (sync) {
-    const entry = teamEntry();
-    enqueue('join', TEAM_ID, { id: TEAM_ID, ns: NS, label: teamLabel(entry), secret: sync.secret, memberId: pick });
+  if (IS_TEAM) {
+    const mine = me();
+    if (mine) {
+      if (mine.name !== name || (mine.avatar || null) !== avatar) { mine.name = name; mine.avatar = avatar; save(); }
+    } else if (mode === 'create') await createTeamWithProfile();
+    else joinWithProfile();
   }
   render();
 }
-function backWho() {
-  if (whoMode === 'create') {
-    // A team board without its first member would be rosterless forever:
-    // backing out discards the namespace entirely.
-    try { localStorage.removeItem(KEY); } catch (err) { /* nothing to discard */ }
-    readOnly = true; // nothing may re-save it on the way out
-    location.assign(boardUrl(null));
-    return;
-  }
-  closeWho();
+
+function addMeToRoster() {
+  const p = myProfile();
+  const m = { id: C.uid(), name: p.name, color: nextMemberColor(), ...(p.avatar ? { avatar: p.avatar } : {}) };
+  state.members = [...(state.members || []), m];
+  setMe(m.id);
+  flushPendingSave();
+  return m;
 }
-$('#who-close').innerHTML = ICON.close;
-$('#who-close').onclick = backWho;
-$('#who-back').onclick = backWho;
-$('#who-join').onclick = commitWho;
+
+/** Joining uses your profile: no picker, no question. */
+function joinWithProfile() {
+  if (!IS_TEAM || state.me || !myProfile().name) return false;
+  addMeToRoster();
+  if (sync) {
+    const entry = teamEntry();
+    enqueue('join', TEAM_ID, { id: TEAM_ID, ns: NS, label: teamLabel(entry), secret: sync.secret, memberId: state.me });
+  }
+  toast(tr('joinedTeam'));
+  render();
+  return true;
+}
+
+async function createTeamWithProfile() {
+  if (!pendingNewSecret || !myProfile().name) return;
+  const m = addMeToRoster();
+  const ok = await enableSync(pendingNewSecret);
+  if (!ok) { toast(tr('syncFailed')); return; }
+  pendingNewSecret = null;
+  enqueue('join', TEAM_ID, { id: TEAM_ID, ns: NS, label: tr('team'), secret: sync.secret, memberId: m.id });
+  render();
+  openSync('on');
+}
+
+function discardNewTeam() {
+  try { localStorage.removeItem(KEY); } catch (err) { /* nothing to discard */ }
+  readOnly = true; // nothing may re-save it on the way out
+  location.assign(boardUrl(null));
+}
+
+let pendingNewSecret = null;
+$('#me').onclick = e => { e.stopPropagation(); if (profileMenu.hidden) openProfile(); else closeProfile(); };
+document.addEventListener('click', e => {
+  if (!profileMenu.hidden && !e.target.closest('#profileMenu') && !e.target.closest('#me')) closeProfile();
+});
+
 
 /* team page boot: identity and membership follow the personal board */
 
@@ -4136,6 +4163,12 @@ function followTeamEntry() {
   const home = homeBoard();
   // your devices agree on who you are: the entry's identity wins everywhere
   if (entry && entry.memberId && entry.memberId !== state.me && memberOf(entry.memberId)) setMe(entry.memberId);
+  // and your profile is who you are on every team: a new name or avatar
+  // reaches your roster entry here the next time this board opens
+  const mine = me(), p = myProfile();
+  if (mine && p.name && (mine.name !== p.name || (mine.avatar || null) !== (p.avatar || null))) {
+    mine.name = p.name; mine.avatar = p.avatar || null; save();
+  }
   // Left on another device: disconnect here too — forget the key, keep the board.
   if (!entry && home.teamsLeft && home.teamsLeft[TEAM_ID] != null && sync) syncStopped();
   renderSwitcher();
@@ -4145,7 +4178,7 @@ function followTeamEntry() {
 function afterTeamAdoption() {
   if (!IS_TEAM || !(state.members || []).length) return;
   followTeamEntry();
-  if (!state.me) openWho('join');
+  if (!state.me) { if (!joinWithProfile()) openProfile('join'); }
   else if (sync) {
     const entry = teamEntry();
     if (!entry || !entry.secret) enqueue('join', TEAM_ID, { id: TEAM_ID, ns: NS, label: teamLabel(entry), secret: sync.secret, memberId: state.me });
@@ -4166,7 +4199,11 @@ function bootTeamPage() {
       && !(state.members || []).length && !state.tasks.length && !state.events.length
       && !(state.projects || []).length && !Object.keys(state.tombstones || {}).length;
     C.teamIdOf(secret).then(id => {
-      if (fresh && C.teamNs(id) === NS) { pendingNewSecret = secret; openWho('create'); }
+      if (fresh && C.teamNs(id) === NS) {
+        pendingNewSecret = secret;
+        // your profile makes you the first member; only without one is there a question
+        if (myProfile().name) createTeamWithProfile(); else openProfile('create');
+      }
       else location.assign(boardUrl(null));
     }, () => location.assign(boardUrl(null)));
     return true;
@@ -4179,7 +4216,7 @@ function bootTeamPage() {
     presentCandidateWhenSettled(entry.secret);
     return true;
   }
-  if (sync && (state.members || []).length && !state.me) openWho('join');
+  if (sync && (state.members || []).length && !state.me) afterTeamAdoption();
   return false;
 }
 
@@ -4201,10 +4238,11 @@ function renderMembers() {
   if (!list.length) return;
   const mine = me();
   const others = list.filter(m => !mine || m.id !== mine.id);
-  el.innerHTML = [mine, ...others].filter(Boolean).slice(0, 5).map(m => avatarHtml(m)).join('');
-  el.title = tr('whoAreYou');
+  el.hidden = !others.length;
+  el.innerHTML = others.slice(0, 5).map(m => avatarHtml(m)).join('');
+  el.title = others.map(m => m.name).join(', ');
 }
-$('#members').onclick = () => openWho('join');
+$('#members').onclick = e => { e.stopPropagation(); openProfile(); };
 
 function assigneePills() {
   if (!IS_TEAM || !(state.members || []).length) return [];

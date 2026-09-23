@@ -35,12 +35,14 @@
 
   <div class="tools">
     <button class="members" id="members" hidden></button>
+
     <label class="search" id="searchWrap">
       <input id="q" type="text" placeholder="Search" spellcheck="false" autocomplete="off">
     </label>
     <button class="icon" id="reportBtn" title="Weekly report &nbsp;R"></button>
     <button class="icon" id="newTask" title="New task &nbsp;N"></button>
     <button class="icon" id="menuBtn" title="More" aria-label="More" aria-expanded="false"></button>
+    <button class="me" id="me" aria-haspopup="true"></button>
   </div>
 </header>
 
@@ -119,20 +121,8 @@
 <div class="menu weeks" id="weeks" hidden></div>
 <div class="menu boards-menu" id="boardsMenu" hidden></div>
 <div class="menu machines-menu" id="machineMenu" hidden></div>
+<div class="menu profile-menu" id="profileMenu" hidden></div>
 
-<!-- who are you: the one new step on a team board -->
-<section class="sheet whoami" id="whoami" hidden role="dialog" aria-modal="true" aria-labelledby="whoTitle">
-  <header class="sheet-head"><button class="icon sm" id="who-close"></button></header>
-  <div class="sheet-body">
-    <h2 class="who-title" id="whoTitle">Who are you?</h2>
-    <div class="who-list" id="who-list"></div>
-  </div>
-  <footer class="sheet-foot">
-    <button class="ghost" id="who-back">Back</button>
-    <span class="grow"></span>
-    <button class="primary" id="who-join">Join</button>
-  </footer>
-</section>
 
 <!-- computers: where each session lives -->
 <aside class="panel" id="computers" hidden role="dialog" aria-modal="true" aria-label="Computers">

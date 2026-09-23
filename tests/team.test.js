@@ -327,3 +327,16 @@ test('a private session never keeps a deleted computer', () => {
   assert.ok(!merged.privateSessions[k].sessionMachine);
   assert.equal(merged.privateSessions[k].session, 's');
 });
+
+test('the profile syncs as one record: newest clock wins, it makes the board v3, and it never lands on a team board', () => {
+  const prev = board({ profile: { name: 'Seb', avatar: 'byte', mt: 5 } });
+  const next = clone(prev); next.profile.avatar = 'miso';
+  save(prev, next, 1);
+  assert.ok(next.profile.mt > 5);
+  assert.equal(C.merge(prev, next).profile.avatar, 'miso');
+  assert.equal(C.merge(next, prev).profile.avatar, 'miso');
+  assert.equal(C.syncable(next).v, 3);
+  assert.equal(C.merge(board(), next).profile.name, 'Seb', 'a remote-only profile survives merge');
+  assert.match(C.validateSyncable({ ...board({ members: [{ id: 'm', name: 'A' }] }), profile: { name: 'x' } }, 'team'), /profile/);
+  assert.match(C.validateSyncable(board({ profile: { name: 5 } })), /profile/);
+});
