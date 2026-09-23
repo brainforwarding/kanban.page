@@ -1,0 +1,11 @@
+{
+  "name": "kanban",
+  "version": "1.0.0",
+  "description": "Let Claude keep your kanban.page board up to date: one card per session, written in plain language, with a line that reopens the session.",
+  "author": {
+    "name": "brainforwarding"
+  },
+  "homepage": "https://kanban.page",
+  "repository": "https://github.com/brainforwarding/kanban.page",
+  "license": "MIT"
+}

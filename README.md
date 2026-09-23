@@ -152,8 +152,20 @@ it in your OS keychain, never accepts it as an argument, and never prints it.
 
 ### Letting an agent use it
 
-Drop [`docs/agents.md`](docs/agents.md) into your own project as `AGENTS.md`
-(or paste it into a `CLAUDE.md`) and an agent has what it needs: the commands,
+In Claude Code, install the plugin:
+
+```
+/plugin marketplace add brainforwarding/kanban.page
+/plugin install kanban@kanban-page
+```
+
+Claude then keeps the board up to date as you work: one card per session, in
+plain words, with a line on the card that reopens the session in the right
+folder. Tell it which board to use in your `CLAUDE.md` if you have more than
+one.
+
+For any other agent, drop [`docs/agents.md`](docs/agents.md) into your own
+project as `AGENTS.md` (or paste it into a `CLAUDE.md`) and an agent has what it needs: the commands,
 the id rules, and the two things it must not assume. It only needs a board
 already registered with `kanban board add`.
 

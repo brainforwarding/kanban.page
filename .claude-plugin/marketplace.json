@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "kanban-page",
+  "description": "Claude Code plugins for kanban.page",
+  "owner": {
+    "name": "brainforwarding"
+  },
+  "plugins": [
+    {
+      "name": "kanban",
+      "description": "Let Claude keep your kanban.page board up to date: one card per session, written in plain language, with a line that reopens the session.",
+      "source": "./plugins/kanban",
+      "category": "productivity",
+      "homepage": "https://kanban.page"
+    }
+  ]
+}
