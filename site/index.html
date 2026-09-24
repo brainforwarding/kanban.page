@@ -17,6 +17,16 @@
 <meta name="twitter:title" content="kanban.page — a simple kanban for everything you're working on">
 <meta name="twitter:description" content="Organised by stage and by project. Free, works offline, no account — and your coding agent can edit it too.">
 <meta name="twitter:image" content="https://kanban.page/og.png">
+<link rel="alternate" type="text/markdown" title="kanban.page for agents" href="/llms.txt">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"kanban.page",
+ "url":"https://kanban.page/","installUrl":"https://www.npmjs.com/package/kanban.page",
+ "applicationCategory":"ProductivityApplication","operatingSystem":"Web, macOS, Linux, Windows",
+ "offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},
+ "license":"https://github.com/brainforwarding/kanban.page/blob/main/LICENSE",
+ "codeRepository":"https://github.com/brainforwarding/kanban.page",
+ "description":"A free kanban board for everything you are working on, organised by stage and by project. No account, works offline, end-to-end encrypted sync. The kanban CLI (npm i -g kanban.page) and the Claude Code plugin (/plugin marketplace add brainforwarding/kanban.page, then /plugin install kanban@kanban-page) let a coding agent keep the board up to date. Agent instructions: https://kanban.page/llms.txt"}
+</script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2314131A'/><rect x='9' y='7' width='6' height='18' rx='1.5' fill='%23FFB454'/><rect x='18' y='7' width='6' height='11' rx='1.5' fill='%235B5768'/></svg>">
 <style>
 /* ─────────────────────────────────────────────────────────
@@ -478,6 +488,8 @@ h1,h2,h3,p{margin:0}
 /* The tool is named in the machine's voice, like every other command on this
    page; the sentence around it stays human. */
 .cli-note{margin-top:20px}
+.cli-note.plug{margin-top:8px}
+@media (max-width:620px){.plug .cmd{white-space:normal;overflow-wrap:anywhere;line-height:1.7;-webkit-box-decoration-break:clone;box-decoration-break:clone}}
 .cmd{font:500 .92em/1 var(--mono);color:var(--muted);
   background:var(--raise);border:1px solid var(--line);border-radius:5px;
   padding:2px 6px;white-space:nowrap}
@@ -847,6 +859,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
     </div>
 
     <p class="ask cli-note"><span class="cmd">npm i -g kanban.page</span> &mdash; same relay, same encryption and same merge rules as your phone; it is simply a second client. <a href="https://github.com/brainforwarding/kanban.page#from-a-terminal">How it works &rarr;</a></p>
+    <p class="ask cli-note plug">In Claude Code: <span class="cmd">/plugin marketplace add brainforwarding/kanban.page</span> then <span class="cmd">/plugin install kanban@kanban-page</span> &mdash; Claude keeps a card for each session.</p>
   </div>
 </section>
 
@@ -1057,6 +1070,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
   <div class="wrap" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 22px">
     <span>kanban.page &mdash; made by <a class="by" href="https://x.com/sebasonearth" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>@sebasonearth</a></span>
     <span class="grow"></span>
+    <a href="/llms.txt">for agents</a>
     <a href="https://github.com/brainforwarding/kanban.page">github</a>
     <a href="https://github.com/brainforwarding/kanban.page/blob/main/LICENSE">MIT</a>
     <span>no analytics, no cookies</span>

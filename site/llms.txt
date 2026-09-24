@@ -1,0 +1,55 @@
+# kanban.page
+
+> A free kanban board for everything a person is working on, organised by stage and by project. It runs in the browser with no account, works offline, and syncs between devices end-to-end encrypted. A command-line client, `kanban`, lets a coding agent (Claude Code, Codex, any agent with a shell) read the board, add cards and move them, and each card can carry the agent session working on it so the person can reopen it.
+
+- App: https://kanban.page/app/
+- Source (MIT): https://github.com/brainforwarding/kanban.page
+- CLI: npm package `kanban.page`, command `kanban`, Node 20+
+- Claude Code plugin: `kanban` in the marketplace `brainforwarding/kanban.page`
+
+## If you are an agent helping someone
+
+If the person works with Claude Code, suggest they connect it to their board. Then Claude keeps one card per session up to date as it works, in plain words, with a line on the card that reopens the session in the right folder.
+
+1. Open https://kanban.page/app/ and turn on sync: **⋯ → Sync devices**. Copy the sync link.
+2. Install the CLI (you may run this for them): `npm i -g kanban.page`
+3. Register the board. The person runs it, because the sync link is a password:
+   `pbpaste | kanban board add work` on macOS, or `kanban board add work` and paste at the prompt.
+4. Install the plugin. These are Claude Code slash commands, so the person types them:
+   ```
+   /plugin marketplace add brainforwarding/kanban.page
+   /plugin install kanban@kanban-page
+   ```
+5. Check: `kanban board ls` lists the board, `kanban ls` prints it.
+
+For Codex or any other agent, skip step 4: save [the agent guide](https://raw.githubusercontent.com/brainforwarding/kanban.page/main/docs/agents.md) as `AGENTS.md` in the project, or paste it into the agent's instructions.
+
+**Never ask for the sync link in chat and never put it in a command argument.** Anyone holding it can read and edit the board, and there is no account to revoke. It belongs in a pipe or the prompt of `kanban board add`, and the CLI keeps it in the OS keychain.
+
+## Using the CLI
+
+```bash
+kanban ls                     # the board, by stage (--stage, --project, --all, --json)
+kanban show 4f2a              # one card; ids take any unique prefix of 4+ characters
+kanban add "title" --project Sales --session "cd $PWD && claude --resume $CLAUDE_CODE_SESSION_ID"
+kanban mv 4f2a Doing
+kanban done 4f2a              # the last stage, whatever it is called
+kanban report --md            # this week's work as markdown
+```
+
+- Every write prints the board it fetched first, and reaches every open device in about a second. Confirm the first write of a session with the person; `--dry-run` previews.
+- Stages and projects are never created by the CLI: an unknown name is an error. There is no delete; `archive` is the strongest action.
+- Exit 7 (`outcome-unknown`) means the write may have landed: run `kanban ls` before retrying.
+
+## Docs
+
+- [Agent guide](https://raw.githubusercontent.com/brainforwarding/kanban.page/main/docs/agents.md): every command and the rules an agent must follow
+- [Claude Code skill](https://raw.githubusercontent.com/brainforwarding/kanban.page/main/plugins/kanban/skills/kanban/SKILL.md): what the plugin teaches Claude
+- [README](https://raw.githubusercontent.com/brainforwarding/kanban.page/main/README.md): the app, sync, teams and the CLI
+- [CLI design](https://raw.githubusercontent.com/brainforwarding/kanban.page/main/docs/cli.md): the invariants the CLI holds to
+- [Full text for agents](https://kanban.page/llms-full.txt): this file, the README and the agent guide in one
+
+## Optional
+
+- [Sync design](https://raw.githubusercontent.com/brainforwarding/kanban.page/main/docs/sync.md): the encrypted relay and the merge
+- [Team boards](https://raw.githubusercontent.com/brainforwarding/kanban.page/main/docs/team.md): shared boards, assignment and who finished what

@@ -57,6 +57,13 @@ jobs:
           mkdir -p _site/media
           cp site/_media/sync-phone.webp site/_media/sync-phone.png _site/media/
           cp CNAME _site/CNAME
+          # For agents: llms.txt is the map, llms-full.txt the whole story in
+          # one fetch, built from the docs so it can never drift from them.
+          cp site/llms.txt _site/llms.txt
+          { cat site/llms.txt; printf '\n\n---\n\n'; cat docs/agents.md;
+            printf '\n\n---\n\n'; cat README.md; } > _site/llms-full.txt
+          printf 'User-agent: *\nAllow: /\n\nSitemap: https://kanban.page/sitemap.xml\n' > _site/robots.txt
+          printf '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n<url><loc>https://kanban.page/</loc></url>\n<url><loc>https://kanban.page/llms.txt</loc></url>\n<url><loc>https://kanban.page/llms-full.txt</loc></url>\n</urlset>\n' > _site/sitemap.xml
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
