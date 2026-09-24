@@ -154,6 +154,7 @@ function applyLocale() {
   $('#f-notes').placeholder = tr('notes');
   $('#projectLabel').textContent = tr('project');
   $('#imagesLabel').textContent = tr('images');
+  $('#f-image').title = tr('addImage');
   $('#sessionLabel').textContent = tr('session');
   $('#f-session-copy').title = tr('copy');
   $('#f-archive').textContent = tr('archive');
@@ -2196,6 +2197,11 @@ function renderProjectChooser() {
   add.innerHTML = ICON.plus;
   add.onclick = () => { saveEditor(); openProjects(); }; // closing = saving
   fProject.append(add);
+  // on a phone the chooser is one scrolling row: bring the chosen one into it
+  const on = fProject.querySelector('[aria-pressed="true"]');
+  if (on && fProject.scrollWidth > fProject.clientWidth) {
+    fProject.scrollLeft = Math.max(0, on.offsetLeft - fProject.offsetLeft - 20);
+  }
 }
 
 function syncFlagBtn() {
@@ -5076,6 +5082,9 @@ function removeImage(id) {
 /* ── the strip (B1) ── */
 
 const fImages = $('#f-images');
+const fImagesField = $('#imagesField');
+$('#f-image').innerHTML = ICON.image;
+$('#f-image').onclick = () => fImageFile.click();
 const fImagesNote = $('#f-images-note');
 const fImageFile = $('#f-image-file');
 
@@ -5101,9 +5110,12 @@ function renderImages() {
     note.querySelector('[data-a="no"]').onclick = () => { noticeFiles = null; renderImages(); };
     fImages.append(note);
     fImagesNote.textContent = '';
+    fImagesField.hidden = false;
     return;
   }
   const list = draftImageList();
+  // no images, no row: the footer's image button is how one is added
+  fImagesField.hidden = !list.length;
   list.forEach((a, i) => {
     const tile = document.createElement('button');
     tile.type = 'button';
@@ -5133,13 +5145,6 @@ function renderImages() {
     }
     fImages.append(tile);
   });
-  const add = document.createElement('button');
-  add.type = 'button';
-  add.className = 'img-add';
-  add.title = tr('addImage');
-  add.innerHTML = `${ICON.plus}<span>${esc(tr('addPhoto'))}</span>`;
-  add.onclick = () => fImageFile.click();
-  fImages.append(add);
   renderImagesNote(list);
 }
 
@@ -5147,7 +5152,7 @@ function renderImages() {
 async function renderImagesNote(list) {
   const d = draftImgs;
   const ready = list.filter(a => !a.preparing && a.blob);
-  let text = tr('imagesHint');
+  let text = '';
   let cls = '';
   if (ready.some(a => imgFail.get(a.blob) === 'full') && boardFull) {
     text = `${tr('boardFull')} · ${kb(boardFull.used)} / ${kb(boardFull.quota)}`;
@@ -5158,7 +5163,8 @@ async function renderImagesNote(list) {
     const fp = sync && blobKeys && blobKeys.secret === sync.secret ? blobKeys.fp : null;
     const unsent = recs.filter(r => r && !(r.sentTo || []).length && !(fp && (r.sentTo || []).includes(fp)));
     const arriving = ready.filter((a, i) => !recs[i]);
-    if (unsent.length && !sync) { text = tr('onlyHere'); cls = 'warn'; }
+    // an unsynced board keeps images here by design: nothing to report
+    if (unsent.length && !sync) { /* quiet */ }
     else if (unsent.length && syncStatus === 'offline') { text = tr('uploadWaiting'); cls = 'warn'; }
     else if (unsent.length || uploadingNow) { text = tr('uploadingN').replace('{n}', Math.max(1, unsent.length)); cls = 'busy'; }
     else if (arriving.length && sync) { text = tr('arrivingN').replace('{n}', arriving.length); cls = 'busy'; }

@@ -260,11 +260,14 @@ up to 200 MB, reads only `images` entries referenced by the file's
 - **Card (A1):** in the meta row, an image glyph and the count in mono, then
   the avatar of whoever added the latest image (team boards). Same in compact
   density. A card with no live images renders exactly as before.
-- **Editor (B1):** an IMAGES field under Notes: 72 px thumbnails with the
-  adder's avatar (team boards), then a dashed + tile; under it the hint
-  `paste ⌘V · drop · or +`, replaced by a status line when there is something
-  to say (uploading, arriving, only on this device, retrying, board full with
-  its meter). Dragging a file over the sheet outlines it as a drop target.
+- **Editor (B1, quieted after use):** an IMAGES row under Notes that exists
+  only when the card has images: 72 px thumbnails with the adder's avatar
+  (team boards). Adding is an image button in the footer (the file picker),
+  paste, or a drop anywhere on the sheet, which outlines it as the target. No
+  hint text. Under the thumbnails, a status line only when there is something
+  to say on a synced board (uploading, arriving, retrying, board full with its
+  meter); an unsynced board keeps images on the device by design and says
+  nothing about it.
 - **Lightbox (C1):** the board dims; top-left the file name, size and pixels
   in mono; centre `n / N`; top-right who added it and when, download, remove,
   close. Prev/next arrows and ← →; a thumbnail row; Esc closes the lightbox
@@ -273,8 +276,8 @@ up to 200 MB, reads only `images` entries referenced by the file's
   asks once, inline in the strip: "Everyone with this team's link can see
   images you add here." — Add image / Cancel. The answer is a device
   preference (`imageNoticeSeen`) and never travels.
-- **Phone (E):** the + tile becomes a full-width "Add photo or image" button;
-  the lightbox is full-screen.
+- **Phone (E):** the footer's image button opens the photo picker; the
+  lightbox is full-screen.
 
 ## Invariants an agent can break
 

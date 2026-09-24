@@ -190,7 +190,7 @@ and three replicas converging. The CLI suite covers the ways a headless
 writer could lose work: a lost response double-adding a card, a retry
 restamping clocks, a concurrent delete losing to a stale edit, and a
 future schema being written back as an old one. Then open `tests/dom.test.html` in Chrome for
-55 interaction tests — they drive the real app in an iframe and report
+56 interaction tests — they drive the real app in an iframe and report
 pass/fail in the page title, against a `?ns=test` board that never touches
 your data — and `tests/team.dom.test.html` for 22 end-to-end team and computer
 flows (two people, one in-memory relay, scratch namespaces only).

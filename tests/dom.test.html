@@ -1183,6 +1183,16 @@ frame.addEventListener('load', async function run() {
     assert(!JSON.stringify(stored).includes('data:image') && JSON.stringify(stored.attachments).length < 400, 'the board holds a reference, not bytes');
   });
 
+  await test('a card without images shows no images row; the footer button adds one', async () => {
+    await reset();
+    W.openEditor(null);
+    assert(D.getElementById('imagesField').hidden, 'no empty images row');
+    assert(D.getElementById('f-image'), 'the footer has the add-image button');
+    await pasteImage(await pngFile());
+    await until(() => !D.getElementById('imagesField').hidden, 3000, 'the row appears with the image');
+    W.closeEditor();
+  });
+
   await test('Esc discards a pasted image and frees its bytes', async () => {
     await reset();
     W.openEditor(null);
@@ -1249,7 +1259,7 @@ frame.addEventListener('load', async function run() {
     await reload();
     W.openEditor(W.__board.state.tasks.find(t => t.title === 'kept here').id);
     await until(() => D.querySelector('#f-images .img-tile.ready img'), 4000, 'the image did not come back from the device store');
-    assert(/only on this device/.test(D.getElementById('f-images-note').textContent), 'says it is only here');
+    eq(D.getElementById('f-images-note').textContent, '', 'an unsynced board has nothing to explain');
     W.closeEditor();
   });
 
