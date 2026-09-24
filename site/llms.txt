@@ -9,7 +9,7 @@
 
 ## If you are an agent helping someone
 
-If the person works with Claude Code, suggest they connect it to their board. Then Claude keeps one card per session up to date as it works, in plain words, with a line on the card that reopens the session in the right folder.
+If the person asked you to set up kanban.page, walk them through the steps below one at a time, doing the ones you can. If they work with Claude Code and did not ask, suggest they connect it to their board. Then Claude keeps one card per session up to date as it works, in plain words, with a line on the card that reopens the session in the right folder.
 
 1. Open https://kanban.page/app/ and turn on sync: **⋯ → Sync devices → Start syncing this board**. Copy the sync link it shows.
 2. Install the CLI (you may run this for them; needs Node 20+): `npm i -g kanban.page`

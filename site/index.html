@@ -488,8 +488,13 @@ h1,h2,h3,p{margin:0}
 /* The tool is named in the machine's voice, like every other command on this
    page; the sentence around it stays human. */
 .cli-note{margin-top:20px}
-.cli-note.plug{margin-top:8px}
-@media (max-width:620px){.plug .cmd{white-space:normal;overflow-wrap:anywhere;line-height:1.7;-webkit-box-decoration-break:clone;box-decoration-break:clone}}
+/* the one-line setup: say it to your agent, which reads llms.txt and does the rest */
+.tellrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.close .tellrow{justify-content:center;margin-top:26px}
+.cli-note.tellrow{margin-top:10px}
+.sess.tell{display:inline-flex;width:auto;max-width:100%;margin:0;padding:7px 12px;font-size:13px}
+.sess.tell .sweep{font-size:12px;padding-left:12px}
+@media (max-width:620px){.sess.tell .txt{white-space:normal}}
 .cmd{font:500 .92em/1 var(--mono);color:var(--muted);
   background:var(--raise);border:1px solid var(--line);border-radius:5px;
   padding:2px 6px;white-space:nowrap}
@@ -861,7 +866,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
     </div>
 
     <p class="ask cli-note"><a class="cmd" href="https://www.npmjs.com/package/kanban.page">npm i -g kanban.page</a> &mdash; same relay, same encryption and same merge rules as your phone; it is simply a second client. <a href="https://github.com/brainforwarding/kanban.page#from-a-terminal">How it works &rarr;</a></p>
-    <p class="ask cli-note plug">In Claude Code: <span class="cmd">/plugin marketplace add brainforwarding/kanban.page</span> then <span class="cmd">/plugin install kanban@kanban-page</span> &mdash; Claude keeps a card for each session. Setting this up for someone? <a href="/llms.txt">Agent instructions: kanban.page/llms.txt</a></p>
+    <p class="ask cli-note tellrow">Using Claude Code or Codex? Tell it: <button class="sess tell" data-copy="Set up kanban.page for me: read https://kanban.page/llms.txt"><span class="caret">&#9656;</span><span class="txt">Set up kanban.page for me: kanban.page/llms.txt</span><span class="sweep">&#10003; copied &mdash; paste it to your agent</span></button></p>
   </div>
 </section>
 
@@ -1009,6 +1014,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
       <a class="btn primary" href="https://kanban.page/app/">Open the board</a>
     </div>
     <p class="fineprint rv" style="--d:.12s">opens in about a second &nbsp;·&nbsp; stays in your browser</p>
+    <p class="ask tellrow rv" style="--d:.15s">Using Claude Code or Codex? Tell it: <button class="sess tell" data-copy="Set up kanban.page for me: read https://kanban.page/llms.txt"><span class="caret">&#9656;</span><span class="txt">Set up kanban.page for me: kanban.page/llms.txt</span><span class="sweep">&#10003; copied &mdash; paste it to your agent</span></button></p>
     <div class="afters rv" style="--d:.18s">
       <a class="share" target="_blank" rel="noopener"
          href="https://x.com/intent/post?text=A%20simple%20kanban%20for%20everything%20you%27re%20working%20on.%20Free%2C%20offline%2C%20no%20account%20%E2%80%94%20and%20your%20coding%20agent%20can%20edit%20it%20too.&url=https%3A%2F%2Fkanban.page%2F">
