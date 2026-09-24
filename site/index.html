@@ -496,6 +496,7 @@ h1,h2,h3,p{margin:0}
 .ask a{color:var(--muted);border-bottom:1px solid var(--line-hi);padding-bottom:1px;
   transition:color .2s var(--ease), border-color .2s var(--ease)}
 .ask a:hover{color:var(--accent);border-color:var(--accent-dim)}
+.ask a.cmd{border:1px solid var(--line);padding:2px 6px}
 
 /* ── devices ─────────────────────────────────────────── */
 
@@ -743,6 +744,7 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
   <a class="brand" href="#top"><span class="blink"></span>kanban.page</a>
   <span class="grow"></span>
   <button class="railbtn" id="themeBtn" title="Light / dark">theme</button>
+  <a class="railbtn hide-s" href="/llms.txt" title="Setup steps for AI agents">for agents</a>
   <a class="railbtn hide-s" href="https://github.com/brainforwarding/kanban.page">source</a>
   <a class="railbtn cupbtn hide-s" href="https://buymeacoffee.com/sebasonearth" target="_blank" rel="noopener"
      title="Buy me a coffee" aria-label="Buy me a coffee"><svg class="cup" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8z"/><path d="M17 10h1.4a2.6 2.6 0 0 1 0 5.2H17"/></svg></a>
@@ -858,8 +860,8 @@ svg.cup{width:15px;height:15px;flex:none;fill:none;stroke:currentColor;
       </div>
     </div>
 
-    <p class="ask cli-note"><span class="cmd">npm i -g kanban.page</span> &mdash; same relay, same encryption and same merge rules as your phone; it is simply a second client. <a href="https://github.com/brainforwarding/kanban.page#from-a-terminal">How it works &rarr;</a></p>
-    <p class="ask cli-note plug">In Claude Code: <span class="cmd">/plugin marketplace add brainforwarding/kanban.page</span> then <span class="cmd">/plugin install kanban@kanban-page</span> &mdash; Claude keeps a card for each session.</p>
+    <p class="ask cli-note"><a class="cmd" href="https://www.npmjs.com/package/kanban.page">npm i -g kanban.page</a> &mdash; same relay, same encryption and same merge rules as your phone; it is simply a second client. <a href="https://github.com/brainforwarding/kanban.page#from-a-terminal">How it works &rarr;</a></p>
+    <p class="ask cli-note plug">In Claude Code: <span class="cmd">/plugin marketplace add brainforwarding/kanban.page</span> then <span class="cmd">/plugin install kanban@kanban-page</span> &mdash; Claude keeps a card for each session. Setting this up for someone? <a href="/llms.txt">Agent instructions: kanban.page/llms.txt</a></p>
   </div>
 </section>
 
