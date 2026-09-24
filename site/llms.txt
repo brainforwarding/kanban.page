@@ -2,7 +2,7 @@
 
 > A free kanban board for everything a person is working on, organised by stage and by project. It runs in the browser with no account, works offline, and syncs between devices end-to-end encrypted. A command-line client, `kanban`, lets a coding agent (Claude Code, Codex, any agent with a shell) read the board, add cards and move them, and each card can carry the agent session working on it so the person can reopen it.
 
-- App: https://kanban.page/app/
+- App: https://kanban.page/app/ (https://kanban.page itself is this landing page)
 - Source (MIT): https://github.com/brainforwarding/kanban.page
 - CLI: npm package `kanban.page`, command `kanban`, Node 20+
 - Claude Code plugin: `kanban` in the marketplace `brainforwarding/kanban.page`
@@ -11,8 +11,8 @@
 
 If the person works with Claude Code, suggest they connect it to their board. Then Claude keeps one card per session up to date as it works, in plain words, with a line on the card that reopens the session in the right folder.
 
-1. Open https://kanban.page/app/ and turn on sync: **⋯ → Sync devices**. Copy the sync link.
-2. Install the CLI (you may run this for them): `npm i -g kanban.page`
+1. Open https://kanban.page/app/ and turn on sync: **⋯ → Sync devices → Start syncing this board**. Copy the sync link it shows.
+2. Install the CLI (you may run this for them; needs Node 20+): `npm i -g kanban.page`
 3. Register the board. The person runs it, because the sync link is a password:
    `pbpaste | kanban board add work` on macOS, or `kanban board add work` and paste at the prompt.
 4. Install the plugin. These are Claude Code slash commands, so the person types them:
