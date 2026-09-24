@@ -13,9 +13,8 @@ If the person asked you to set up kanban.page, walk them through the steps below
 
 1. Open https://kanban.page/app/ and turn on sync: **⋯ → Sync devices → Start syncing this board**. Copy the sync link it shows.
 2. Install the CLI (you may run this for them; needs Node 20+): `npm i -g kanban.page`
-3. Register the board. The person runs it, because the sync link is a password:
-   `pbpaste | kanban board add work` on macOS, or `kanban board add work` and paste at the prompt.
-4. Install the plugin. These are Claude Code slash commands, so the person types them:
+3. Register the board once the link is copied: `pbpaste | kanban board add work` on macOS, or `kanban board add work` and paste at the prompt. `work` is any local name for the board.
+4. Install the plugin. **You cannot run these: they are Claude Code slash commands, so ask the person to type them into Claude Code:**
    ```
    /plugin marketplace add brainforwarding/kanban.page
    /plugin install kanban@kanban-page
