@@ -1,5 +1,7 @@
 # kanban.page
 
+<img src="docs/shots/kanban-card.jpg" alt="kanban.page: a simple kanban for everything you're working on. Free, no account, works offline." width="100%">
+
 A personal kanban that keeps your work organised by stage and by project.
 Free, works offline, no account. The board lives in your browser; turn on sync
 and it reaches your other devices through a server that cannot read it.
